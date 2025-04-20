@@ -1,0 +1,2689 @@
+diff -ruN aos_pintos/.git/HEAD pintos-solution/.git/HEAD
+--- aos_pintos/.git/HEAD	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/HEAD	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++ref: refs/heads/master
+diff -ruN aos_pintos/.git/config pintos-solution/.git/config
+--- aos_pintos/.git/config	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/config	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1,11 @@
++[core]
++	repositoryformatversion = 0
++	filemode = true
++	bare = false
++	logallrefupdates = true
++[remote "origin"]
++	url = https://github.com/ConnorMCode/Project3.git
++	fetch = +refs/heads/*:refs/remotes/origin/*
++[branch "master"]
++	remote = origin
++	merge = refs/heads/master
+diff -ruN aos_pintos/.git/description pintos-solution/.git/description
+--- aos_pintos/.git/description	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/description	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1 @@
++Unnamed repository; edit this file 'description' to name the repository.
+diff -ruN aos_pintos/.git/hooks/applypatch-msg.sample pintos-solution/.git/hooks/applypatch-msg.sample
+--- aos_pintos/.git/hooks/applypatch-msg.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/applypatch-msg.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,15 @@
++#!/bin/sh
++#
++# An example hook script to check the commit log message taken by
++# applypatch from an e-mail message.
++#
++# The hook should exit with non-zero status after issuing an
++# appropriate message if it wants to stop the commit.  The hook is
++# allowed to edit the commit message file.
++#
++# To enable this hook, rename this file to "applypatch-msg".
++
++. git-sh-setup
++commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
++test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
++:
+diff -ruN aos_pintos/.git/hooks/commit-msg.sample pintos-solution/.git/hooks/commit-msg.sample
+--- aos_pintos/.git/hooks/commit-msg.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/commit-msg.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,24 @@
++#!/bin/sh
++#
++# An example hook script to check the commit log message.
++# Called by "git commit" with one argument, the name of the file
++# that has the commit message.  The hook should exit with non-zero
++# status after issuing an appropriate message if it wants to stop the
++# commit.  The hook is allowed to edit the commit message file.
++#
++# To enable this hook, rename this file to "commit-msg".
++
++# Uncomment the below to add a Signed-off-by line to the message.
++# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
++# hook is more suited to it.
++#
++# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
++# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
++
++# This example catches duplicate Signed-off-by lines.
++
++test "" = "$(grep '^Signed-off-by: ' "$1" |
++	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
++	echo >&2 Duplicate Signed-off-by lines.
++	exit 1
++}
+diff -ruN aos_pintos/.git/hooks/fsmonitor-watchman.sample pintos-solution/.git/hooks/fsmonitor-watchman.sample
+--- aos_pintos/.git/hooks/fsmonitor-watchman.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/fsmonitor-watchman.sample	2025-04-13 01:30:52.450151710 +0000
+@@ -0,0 +1,114 @@
++#!/usr/bin/perl
++
++use strict;
++use warnings;
++use IPC::Open2;
++
++# An example hook script to integrate Watchman
++# (https://facebook.github.io/watchman/) with git to speed up detecting
++# new and modified files.
++#
++# The hook is passed a version (currently 1) and a time in nanoseconds
++# formatted as a string and outputs to stdout all files that have been
++# modified since the given time. Paths must be relative to the root of
++# the working tree and separated by a single NUL.
++#
++# To enable this hook, rename this file to "query-watchman" and set
++# 'git config core.fsmonitor .git/hooks/query-watchman'
++#
++my ($version, $time) = @ARGV;
++
++# Check the hook interface version
++
++if ($version == 1) {
++	# convert nanoseconds to seconds
++	$time = int $time / 1000000000;
++} else {
++	die "Unsupported query-fsmonitor hook version '$version'.\n" .
++	    "Falling back to scanning...\n";
++}
++
++my $git_work_tree;
++if ($^O =~ 'msys' || $^O =~ 'cygwin') {
++	$git_work_tree = Win32::GetCwd();
++	$git_work_tree =~ tr/\\/\//;
++} else {
++	require Cwd;
++	$git_work_tree = Cwd::cwd();
++}
++
++my $retry = 1;
++
++launch_watchman();
++
++sub launch_watchman {
++
++	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
++	    or die "open2() failed: $!\n" .
++	    "Falling back to scanning...\n";
++
++	# In the query expression below we're asking for names of files that
++	# changed since $time but were not transient (ie created after
++	# $time but no longer exist).
++	#
++	# To accomplish this, we're using the "since" generator to use the
++	# recency index to select candidate nodes and "fields" to limit the
++	# output to file names only. Then we're using the "expression" term to
++	# further constrain the results.
++	#
++	# The category of transient files that we want to ignore will have a
++	# creation clock (cclock) newer than $time_t value and will also not
++	# currently exist.
++
++	my $query = <<"	END";
++		["query", "$git_work_tree", {
++			"since": $time,
++			"fields": ["name"],
++			"expression": ["not", ["allof", ["since", $time, "cclock"], ["not", "exists"]]]
++		}]
++	END
++
++	print CHLD_IN $query;
++	close CHLD_IN;
++	my $response = do {local $/; <CHLD_OUT>};
++
++	die "Watchman: command returned no output.\n" .
++	    "Falling back to scanning...\n" if $response eq "";
++	die "Watchman: command returned invalid output: $response\n" .
++	    "Falling back to scanning...\n" unless $response =~ /^\{/;
++
++	my $json_pkg;
++	eval {
++		require JSON::XS;
++		$json_pkg = "JSON::XS";
++		1;
++	} or do {
++		require JSON::PP;
++		$json_pkg = "JSON::PP";
++	};
++
++	my $o = $json_pkg->new->utf8->decode($response);
++
++	if ($retry > 0 and $o->{error} and $o->{error} =~ m/unable to resolve root .* directory (.*) is not watched/) {
++		print STDERR "Adding '$git_work_tree' to watchman's watch list.\n";
++		$retry--;
++		qx/watchman watch "$git_work_tree"/;
++		die "Failed to make watchman watch '$git_work_tree'.\n" .
++		    "Falling back to scanning...\n" if $? != 0;
++
++		# Watchman will always return all files on the first query so
++		# return the fast "everything is dirty" flag to git and do the
++		# Watchman query just to get it over with now so we won't pay
++		# the cost in git to look up each individual file.
++		print "/\0";
++		eval { launch_watchman() };
++		exit 0;
++	}
++
++	die "Watchman: $o->{error}.\n" .
++	    "Falling back to scanning...\n" if $o->{error};
++
++	binmode STDOUT, ":utf8";
++	local $, = "\0";
++	print @{$o->{files}};
++}
+diff -ruN aos_pintos/.git/hooks/post-update.sample pintos-solution/.git/hooks/post-update.sample
+--- aos_pintos/.git/hooks/post-update.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/post-update.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,8 @@
++#!/bin/sh
++#
++# An example hook script to prepare a packed repository for use over
++# dumb transports.
++#
++# To enable this hook, rename this file to "post-update".
++
++exec git update-server-info
+diff -ruN aos_pintos/.git/hooks/pre-applypatch.sample pintos-solution/.git/hooks/pre-applypatch.sample
+--- aos_pintos/.git/hooks/pre-applypatch.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/pre-applypatch.sample	2025-04-13 01:30:52.450151710 +0000
+@@ -0,0 +1,14 @@
++#!/bin/sh
++#
++# An example hook script to verify what is about to be committed
++# by applypatch from an e-mail message.
++#
++# The hook should exit with non-zero status after issuing an
++# appropriate message if it wants to stop the commit.
++#
++# To enable this hook, rename this file to "pre-applypatch".
++
++. git-sh-setup
++precommit="$(git rev-parse --git-path hooks/pre-commit)"
++test -x "$precommit" && exec "$precommit" ${1+"$@"}
++:
+diff -ruN aos_pintos/.git/hooks/pre-commit.sample pintos-solution/.git/hooks/pre-commit.sample
+--- aos_pintos/.git/hooks/pre-commit.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/pre-commit.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,49 @@
++#!/bin/sh
++#
++# An example hook script to verify what is about to be committed.
++# Called by "git commit" with no arguments.  The hook should
++# exit with non-zero status after issuing an appropriate message if
++# it wants to stop the commit.
++#
++# To enable this hook, rename this file to "pre-commit".
++
++if git rev-parse --verify HEAD >/dev/null 2>&1
++then
++	against=HEAD
++else
++	# Initial commit: diff against an empty tree object
++	against=4b825dc642cb6eb9a060e54bf8d69288fbee4904
++fi
++
++# If you want to allow non-ASCII filenames set this variable to true.
++allownonascii=$(git config --bool hooks.allownonascii)
++
++# Redirect output to stderr.
++exec 1>&2
++
++# Cross platform projects tend to avoid non-ASCII filenames; prevent
++# them from being added to the repository. We exploit the fact that the
++# printable range starts at the space character and ends with tilde.
++if [ "$allownonascii" != "true" ] &&
++	# Note that the use of brackets around a tr range is ok here, (it's
++	# even required, for portability to Solaris 10's /usr/bin/tr), since
++	# the square bracket bytes happen to fall in the designated range.
++	test $(git diff --cached --name-only --diff-filter=A -z $against |
++	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
++then
++	cat <<\EOF
++Error: Attempt to add a non-ASCII file name.
++
++This can cause problems if you want to work with people on other platforms.
++
++To be portable it is advisable to rename the file.
++
++If you know what you are doing you can disable this check using:
++
++  git config hooks.allownonascii true
++EOF
++	exit 1
++fi
++
++# If there are whitespace errors, print the offending file names and fail.
++exec git diff-index --check --cached $against --
+diff -ruN aos_pintos/.git/hooks/pre-push.sample pintos-solution/.git/hooks/pre-push.sample
+--- aos_pintos/.git/hooks/pre-push.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/pre-push.sample	2025-04-13 01:30:52.450151710 +0000
+@@ -0,0 +1,53 @@
++#!/bin/sh
++
++# An example hook script to verify what is about to be pushed.  Called by "git
++# push" after it has checked the remote status, but before anything has been
++# pushed.  If this script exits with a non-zero status nothing will be pushed.
++#
++# This hook is called with the following parameters:
++#
++# $1 -- Name of the remote to which the push is being done
++# $2 -- URL to which the push is being done
++#
++# If pushing without using a named remote those arguments will be equal.
++#
++# Information about the commits which are being pushed is supplied as lines to
++# the standard input in the form:
++#
++#   <local ref> <local sha1> <remote ref> <remote sha1>
++#
++# This sample shows how to prevent push of commits where the log message starts
++# with "WIP" (work in progress).
++
++remote="$1"
++url="$2"
++
++z40=0000000000000000000000000000000000000000
++
++while read local_ref local_sha remote_ref remote_sha
++do
++	if [ "$local_sha" = $z40 ]
++	then
++		# Handle delete
++		:
++	else
++		if [ "$remote_sha" = $z40 ]
++		then
++			# New branch, examine all commits
++			range="$local_sha"
++		else
++			# Update to existing branch, examine new commits
++			range="$remote_sha..$local_sha"
++		fi
++
++		# Check for WIP commit
++		commit=`git rev-list -n 1 --grep '^WIP' "$range"`
++		if [ -n "$commit" ]
++		then
++			echo >&2 "Found WIP commit in $local_ref, not pushing"
++			exit 1
++		fi
++	fi
++done
++
++exit 0
+diff -ruN aos_pintos/.git/hooks/pre-rebase.sample pintos-solution/.git/hooks/pre-rebase.sample
+--- aos_pintos/.git/hooks/pre-rebase.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/pre-rebase.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,169 @@
++#!/bin/sh
++#
++# Copyright (c) 2006, 2008 Junio C Hamano
++#
++# The "pre-rebase" hook is run just before "git rebase" starts doing
++# its job, and can prevent the command from running by exiting with
++# non-zero status.
++#
++# The hook is called with the following parameters:
++#
++# $1 -- the upstream the series was forked from.
++# $2 -- the branch being rebased (or empty when rebasing the current branch).
++#
++# This sample shows how to prevent topic branches that are already
++# merged to 'next' branch from getting rebased, because allowing it
++# would result in rebasing already published history.
++
++publish=next
++basebranch="$1"
++if test "$#" = 2
++then
++	topic="refs/heads/$2"
++else
++	topic=`git symbolic-ref HEAD` ||
++	exit 0 ;# we do not interrupt rebasing detached HEAD
++fi
++
++case "$topic" in
++refs/heads/??/*)
++	;;
++*)
++	exit 0 ;# we do not interrupt others.
++	;;
++esac
++
++# Now we are dealing with a topic branch being rebased
++# on top of master.  Is it OK to rebase it?
++
++# Does the topic really exist?
++git show-ref -q "$topic" || {
++	echo >&2 "No such branch $topic"
++	exit 1
++}
++
++# Is topic fully merged to master?
++not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
++if test -z "$not_in_master"
++then
++	echo >&2 "$topic is fully merged to master; better remove it."
++	exit 1 ;# we could allow it, but there is no point.
++fi
++
++# Is topic ever merged to next?  If so you should not be rebasing it.
++only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
++only_next_2=`git rev-list ^master           ${publish} | sort`
++if test "$only_next_1" = "$only_next_2"
++then
++	not_in_topic=`git rev-list "^$topic" master`
++	if test -z "$not_in_topic"
++	then
++		echo >&2 "$topic is already up to date with master"
++		exit 1 ;# we could allow it, but there is no point.
++	else
++		exit 0
++	fi
++else
++	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
++	/usr/bin/perl -e '
++		my $topic = $ARGV[0];
++		my $msg = "* $topic has commits already merged to public branch:\n";
++		my (%not_in_next) = map {
++			/^([0-9a-f]+) /;
++			($1 => 1);
++		} split(/\n/, $ARGV[1]);
++		for my $elem (map {
++				/^([0-9a-f]+) (.*)$/;
++				[$1 => $2];
++			} split(/\n/, $ARGV[2])) {
++			if (!exists $not_in_next{$elem->[0]}) {
++				if ($msg) {
++					print STDERR $msg;
++					undef $msg;
++				}
++				print STDERR " $elem->[1]\n";
++			}
++		}
++	' "$topic" "$not_in_next" "$not_in_master"
++	exit 1
++fi
++
++<<\DOC_END
++
++This sample hook safeguards topic branches that have been
++published from being rewound.
++
++The workflow assumed here is:
++
++ * Once a topic branch forks from "master", "master" is never
++   merged into it again (either directly or indirectly).
++
++ * Once a topic branch is fully cooked and merged into "master",
++   it is deleted.  If you need to build on top of it to correct
++   earlier mistakes, a new topic branch is created by forking at
++   the tip of the "master".  This is not strictly necessary, but
++   it makes it easier to keep your history simple.
++
++ * Whenever you need to test or publish your changes to topic
++   branches, merge them into "next" branch.
++
++The script, being an example, hardcodes the publish branch name
++to be "next", but it is trivial to make it configurable via
++$GIT_DIR/config mechanism.
++
++With this workflow, you would want to know:
++
++(1) ... if a topic branch has ever been merged to "next".  Young
++    topic branches can have stupid mistakes you would rather
++    clean up before publishing, and things that have not been
++    merged into other branches can be easily rebased without
++    affecting other people.  But once it is published, you would
++    not want to rewind it.
++
++(2) ... if a topic branch has been fully merged to "master".
++    Then you can delete it.  More importantly, you should not
++    build on top of it -- other people may already want to
++    change things related to the topic as patches against your
++    "master", so if you need further changes, it is better to
++    fork the topic (perhaps with the same name) afresh from the
++    tip of "master".
++
++Let's look at this example:
++
++		   o---o---o---o---o---o---o---o---o---o "next"
++		  /       /           /           /
++		 /   a---a---b A     /           /
++		/   /               /           /
++	       /   /   c---c---c---c B         /
++	      /   /   /             \         /
++	     /   /   /   b---b C     \       /
++	    /   /   /   /             \     /
++    ---o---o---o---o---o---o---o---o---o---o---o "master"
++
++
++A, B and C are topic branches.
++
++ * A has one fix since it was merged up to "next".
++
++ * B has finished.  It has been fully merged up to "master" and "next",
++   and is ready to be deleted.
++
++ * C has not merged to "next" at all.
++
++We would want to allow C to be rebased, refuse A, and encourage
++B to be deleted.
++
++To compute (1):
++
++	git rev-list ^master ^topic next
++	git rev-list ^master        next
++
++	if these match, topic has not merged in next at all.
++
++To compute (2):
++
++	git rev-list master..topic
++
++	if this is empty, it is fully merged to "master".
++
++DOC_END
+diff -ruN aos_pintos/.git/hooks/pre-receive.sample pintos-solution/.git/hooks/pre-receive.sample
+--- aos_pintos/.git/hooks/pre-receive.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/pre-receive.sample	2025-04-13 01:30:52.450151710 +0000
+@@ -0,0 +1,24 @@
++#!/bin/sh
++#
++# An example hook script to make use of push options.
++# The example simply echoes all push options that start with 'echoback='
++# and rejects all pushes when the "reject" push option is used.
++#
++# To enable this hook, rename this file to "pre-receive".
++
++if test -n "$GIT_PUSH_OPTION_COUNT"
++then
++	i=0
++	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
++	do
++		eval "value=\$GIT_PUSH_OPTION_$i"
++		case "$value" in
++		echoback=*)
++			echo "echo from the pre-receive-hook: ${value#*=}" >&2
++			;;
++		reject)
++			exit 1
++		esac
++		i=$((i + 1))
++	done
++fi
+diff -ruN aos_pintos/.git/hooks/prepare-commit-msg.sample pintos-solution/.git/hooks/prepare-commit-msg.sample
+--- aos_pintos/.git/hooks/prepare-commit-msg.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/prepare-commit-msg.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,42 @@
++#!/bin/sh
++#
++# An example hook script to prepare the commit log message.
++# Called by "git commit" with the name of the file that has the
++# commit message, followed by the description of the commit
++# message's source.  The hook's purpose is to edit the commit
++# message file.  If the hook fails with a non-zero status,
++# the commit is aborted.
++#
++# To enable this hook, rename this file to "prepare-commit-msg".
++
++# This hook includes three examples. The first one removes the
++# "# Please enter the commit message..." help message.
++#
++# The second includes the output of "git diff --name-status -r"
++# into the message, just before the "git status" output.  It is
++# commented because it doesn't cope with --amend or with squashed
++# commits.
++#
++# The third example adds a Signed-off-by line to the message, that can
++# still be edited.  This is rarely a good idea.
++
++COMMIT_MSG_FILE=$1
++COMMIT_SOURCE=$2
++SHA1=$3
++
++/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
++
++# case "$COMMIT_SOURCE,$SHA1" in
++#  ,|template,)
++#    /usr/bin/perl -i.bak -pe '
++#       print "\n" . `git diff --cached --name-status -r`
++# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
++#  *) ;;
++# esac
++
++# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
++# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
++# if test -z "$COMMIT_SOURCE"
++# then
++#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
++# fi
+diff -ruN aos_pintos/.git/hooks/update.sample pintos-solution/.git/hooks/update.sample
+--- aos_pintos/.git/hooks/update.sample	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/hooks/update.sample	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,128 @@
++#!/bin/sh
++#
++# An example hook script to block unannotated tags from entering.
++# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
++#
++# To enable this hook, rename this file to "update".
++#
++# Config
++# ------
++# hooks.allowunannotated
++#   This boolean sets whether unannotated tags will be allowed into the
++#   repository.  By default they won't be.
++# hooks.allowdeletetag
++#   This boolean sets whether deleting tags will be allowed in the
++#   repository.  By default they won't be.
++# hooks.allowmodifytag
++#   This boolean sets whether a tag may be modified after creation. By default
++#   it won't be.
++# hooks.allowdeletebranch
++#   This boolean sets whether deleting branches will be allowed in the
++#   repository.  By default they won't be.
++# hooks.denycreatebranch
++#   This boolean sets whether remotely creating branches will be denied
++#   in the repository.  By default this is allowed.
++#
++
++# --- Command line
++refname="$1"
++oldrev="$2"
++newrev="$3"
++
++# --- Safety check
++if [ -z "$GIT_DIR" ]; then
++	echo "Don't run this script from the command line." >&2
++	echo " (if you want, you could supply GIT_DIR then run" >&2
++	echo "  $0 <ref> <oldrev> <newrev>)" >&2
++	exit 1
++fi
++
++if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
++	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
++	exit 1
++fi
++
++# --- Config
++allowunannotated=$(git config --bool hooks.allowunannotated)
++allowdeletebranch=$(git config --bool hooks.allowdeletebranch)
++denycreatebranch=$(git config --bool hooks.denycreatebranch)
++allowdeletetag=$(git config --bool hooks.allowdeletetag)
++allowmodifytag=$(git config --bool hooks.allowmodifytag)
++
++# check for no description
++projectdesc=$(sed -e '1q' "$GIT_DIR/description")
++case "$projectdesc" in
++"Unnamed repository"* | "")
++	echo "*** Project description file hasn't been set" >&2
++	exit 1
++	;;
++esac
++
++# --- Check types
++# if $newrev is 0000...0000, it's a commit to delete a ref.
++zero="0000000000000000000000000000000000000000"
++if [ "$newrev" = "$zero" ]; then
++	newrev_type=delete
++else
++	newrev_type=$(git cat-file -t $newrev)
++fi
++
++case "$refname","$newrev_type" in
++	refs/tags/*,commit)
++		# un-annotated tag
++		short_refname=${refname##refs/tags/}
++		if [ "$allowunannotated" != "true" ]; then
++			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
++			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
++			exit 1
++		fi
++		;;
++	refs/tags/*,delete)
++		# delete tag
++		if [ "$allowdeletetag" != "true" ]; then
++			echo "*** Deleting a tag is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/tags/*,tag)
++		# annotated tag
++		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
++		then
++			echo "*** Tag '$refname' already exists." >&2
++			echo "*** Modifying a tag is not allowed in this repository." >&2
++			exit 1
++		fi
++		;;
++	refs/heads/*,commit)
++		# branch
++		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
++			echo "*** Creating a branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/heads/*,delete)
++		# delete branch
++		if [ "$allowdeletebranch" != "true" ]; then
++			echo "*** Deleting a branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	refs/remotes/*,commit)
++		# tracking branch
++		;;
++	refs/remotes/*,delete)
++		# delete tracking branch
++		if [ "$allowdeletebranch" != "true" ]; then
++			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
++			exit 1
++		fi
++		;;
++	*)
++		# Anything else (is there anything else?)
++		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
++		exit 1
++		;;
++esac
++
++# --- Finished
++exit 0
+Binary files aos_pintos/.git/index and pintos-solution/.git/index differ
+diff -ruN aos_pintos/.git/info/exclude pintos-solution/.git/info/exclude
+--- aos_pintos/.git/info/exclude	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/info/exclude	2025-04-13 01:30:52.454151752 +0000
+@@ -0,0 +1,6 @@
++# git ls-files --others --exclude-from=.git/info/exclude
++# Lines that start with '#' are comments.
++# For a project mostly in C, the following would be a good set of
++# exclude patterns (uncomment them if you want to use them):
++# *.[oa]
++# *~
+diff -ruN aos_pintos/.git/logs/HEAD pintos-solution/.git/logs/HEAD
+--- aos_pintos/.git/logs/HEAD	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/logs/HEAD	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
+diff -ruN aos_pintos/.git/logs/refs/heads/master pintos-solution/.git/logs/refs/heads/master
+--- aos_pintos/.git/logs/refs/heads/master	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/logs/refs/heads/master	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
+diff -ruN aos_pintos/.git/logs/refs/remotes/origin/HEAD pintos-solution/.git/logs/refs/remotes/origin/HEAD
+--- aos_pintos/.git/logs/refs/remotes/origin/HEAD	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/logs/refs/remotes/origin/HEAD	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
+Binary files aos_pintos/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.idx and pintos-solution/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.idx differ
+Binary files aos_pintos/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.pack and pintos-solution/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.pack differ
+diff -ruN aos_pintos/.git/packed-refs pintos-solution/.git/packed-refs
+--- aos_pintos/.git/packed-refs	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/packed-refs	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1,2 @@
++# pack-refs with: peeled fully-peeled sorted 
++cc300295edd904f0dba0a8bd3a7770bc19364ac3 refs/remotes/origin/master
+diff -ruN aos_pintos/.git/refs/heads/master pintos-solution/.git/refs/heads/master
+--- aos_pintos/.git/refs/heads/master	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/refs/heads/master	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++cc300295edd904f0dba0a8bd3a7770bc19364ac3
+diff -ruN aos_pintos/.git/refs/remotes/origin/HEAD pintos-solution/.git/refs/remotes/origin/HEAD
+--- aos_pintos/.git/refs/remotes/origin/HEAD	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/.git/refs/remotes/origin/HEAD	2025-04-13 01:30:52.854155928 +0000
+@@ -0,0 +1 @@
++ref: refs/remotes/origin/master
+diff -ruN aos_pintos/src/examples/Makefile pintos-solution/src/examples/Makefile
+--- aos_pintos/src/examples/Makefile	2025-04-13 01:37:15.841621234 +0000
++++ pintos-solution/src/examples/Makefile	2025-04-13 01:30:52.862156011 +0000
+@@ -4,7 +4,7 @@
+ # To add a new test, put its name on the PROGS list
+ # and then add a name_SRC line that lists its source files.
+ PROGS = cat cmp cp echo halt hex-dump ls mkdir pwd rm shell \
+-	bubsort lineup matmult recursor
++	bubsort lineup matmult recursor swap_test test
+ 
+ # Should work from project 2 onward.
+ cat_SRC = cat.c
+@@ -17,6 +17,8 @@
+ ls_SRC = ls.c
+ recursor_SRC = recursor.c
+ rm_SRC = rm.c
++swap_test_SRC = swap_test.c
++test_SRC = test.c
+ 
+ # Should work in project 3; also in project 4 if VM is included.
+ bubsort_SRC = bubsort.c
+diff -ruN aos_pintos/src/examples/swap_test.c pintos-solution/src/examples/swap_test.c
+--- aos_pintos/src/examples/swap_test.c	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/src/examples/swap_test.c	2025-04-13 01:30:52.862156011 +0000
+@@ -0,0 +1,29 @@
++#include "syscall.h"
++#include "stdio.h"
++
++#define PAGE_SIZE 4096
++#define NUM_PAGES 100
++#define TOTAL_SIZE (PAGE_SIZE * NUM_PAGES)
++
++static char big_array[TOTAL_SIZE];
++
++int main(void) {
++  int i;
++
++  // Write a unique value to each page to ensure they get swapped
++  for (i = 0; i < NUM_PAGES; i++) {
++    big_array[i * PAGE_SIZE] = (char)(i + 1);
++  }
++
++  // Read back and verify
++  for (i = 0; i < NUM_PAGES; i++) {
++    if (big_array[i * PAGE_SIZE] != (char)(i + 1)) {
++      printf("Mismatch at page %d: expected %d, got %d\n",
++	     i, i + 1, big_array[i * PAGE_SIZE]);
++      return 1;
++    }
++  }
++
++  printf("swap_test passed!\n");
++  return 0;
++}
+diff -ruN aos_pintos/src/examples/swap_test.c~ pintos-solution/src/examples/swap_test.c~
+--- aos_pintos/src/examples/swap_test.c~	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/src/examples/swap_test.c~	2025-04-13 01:30:52.862156011 +0000
+@@ -0,0 +1,36 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include "syscall.h"
++
++#define PAGE_SIZE 4096
++#define NUM_PAGES 100  // Adjust upward if your physical memory is large
++
++int main(void) {
++  int i;
++  char **pages = (char **)malloc(NUM_PAGES * sizeof(char *));
++  if (pages == NULL) {
++    printf("malloc failed!\n");
++    return 1;
++  }
++
++  // Allocate pages and write a value
++  for (i = 0; i < NUM_PAGES; i++) {
++    pages[i] = (char *)malloc(PAGE_SIZE);
++    if (pages[i] == NULL) {
++      printf("page %d malloc failed!\n", i);
++      return 1;
++    }
++    pages[i][0] = (char)(i + 1);  // Write a unique value to the first byte
++  }
++
++  // Verify all values
++  for (i = 0; i < NUM_PAGES; i++) {
++    if (pages[i][0] != (char)(i + 1)) {
++      printf("Mismatch at page %d: expected %d, got %d\n", i, i + 1, pages[i][0]);
++      return 1;
++    }
++  }
++
++  printf("swap_test passed!\n");
++  return 0;
++}
+diff -ruN aos_pintos/src/examples/test.c~ pintos-solution/src/examples/test.c~
+--- aos_pintos/src/examples/test.c~	1970-01-01 00:00:00.000000000 +0000
++++ pintos-solution/src/examples/test.c~	2025-04-13 01:30:52.862156011 +0000
+@@ -0,0 +1,50 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <syscall.h>
++
++#define SAMPLE_TEXT "This is the sample text file for read-boundary test.\n"
++#define SAMPLE_SIZE (sizeof SAMPLE_TEXT)
++
++// Align close to page boundary
++#define PAGE_SIZE 4096
++
++int
++main (void)
++{
++  int handle;
++  int byte_cnt;
++
++  // Allocate memory near the top of a page, like get_boundary_area()
++  char *page = (char *) malloc (PAGE_SIZE);
++  if (!page) {
++    printf("Failed to allocate memory\n");
++    return -1;
++  }
++
++  // Place buffer so it straddles the boundary
++  char *buffer = page + PAGE_SIZE - SAMPLE_SIZE / 2;
++
++  // Open test file
++  handle = open ("sample.txt");
++  if (handle <= 1) {
++    printf("Failed to open file\n");
++    return -1;
++  }
++
++  byte_cnt = read (handle, buffer, SAMPLE_SIZE - 1);
++  if (byte_cnt != SAMPLE_SIZE - 1) {
++    printf ("read() returned %d instead of %zu\n", byte_cnt, SAMPLE_SIZE - 1);
++    return -1;
++  }
++
++  if (strncmp (SAMPLE_TEXT, buffer, SAMPLE_SIZE - 1)) {
++    printf ("expected text:\n%s\n", SAMPLE_TEXT);
++    printf ("text actually read:\n%s\n", buffer);
++    printf ("Text mismatch!\n");
++    return -1;
++  }
++
++  printf ("read_boundary_simple: passed\n");
++  return 0;
++}
+diff -ruN aos_pintos/src/threads/init.c pintos-solution/src/threads/init.c
+--- aos_pintos/src/threads/init.c	2025-04-13 01:37:15.237616424 +0000
++++ pintos-solution/src/threads/init.c	2025-04-13 01:30:52.870156095 +0000
+@@ -36,6 +36,8 @@
+ #include "devices/ide.h"
+ #include "filesys/filesys.h"
+ #include "filesys/fsutil.h"
++#include "vm/frame.h"
++#include "vm/swap.h"
+ #endif
+ 
+ /* Page directory with kernel mappings only. */
+@@ -93,6 +95,7 @@
+ 
+   /* Initialize memory system. */
+   palloc_init (user_page_limit);
++  frame_table_init();
+   malloc_init ();
+   paging_init ();
+ 
+@@ -124,6 +127,8 @@
+   filesys_init (format_filesys);
+ #endif
+ 
++  swap_init();
++
+   printf ("Boot complete.\n");
+ 
+   /* Run actions specified on kernel command line. */
+diff -ruN aos_pintos/src/threads/interrupt.c pintos-solution/src/threads/interrupt.c
+--- aos_pintos/src/threads/interrupt.c	2025-04-13 01:37:15.141615660 +0000
++++ pintos-solution/src/threads/interrupt.c	2025-04-13 01:30:52.870156095 +0000
+@@ -339,7 +339,9 @@
+ 
+       in_external_intr = true;
+       yield_on_return = false;
+-    }
++    }else{
++    thread_current()->user_esp = frame->esp;
++  }
+ 
+   /* Invoke the interrupt's handler. */
+   handler = intr_handlers[frame->vec_no];
+diff -ruN aos_pintos/src/threads/palloc.c pintos-solution/src/threads/palloc.c
+--- aos_pintos/src/threads/palloc.c	2025-04-13 01:37:15.257616584 +0000
++++ pintos-solution/src/threads/palloc.c	2025-04-13 01:30:52.870156095 +0000
+@@ -72,17 +72,19 @@
+   void *pages;
+   size_t page_idx;
+ 
+-  if (page_cnt == 0)
++  if (page_cnt == 0){
+     return NULL;
+-
++  }
++    
+   lock_acquire (&pool->lock);
+   page_idx = bitmap_scan_and_flip (pool->used_map, 0, page_cnt, false);
+   lock_release (&pool->lock);
+ 
+   if (page_idx != BITMAP_ERROR)
+     pages = pool->base + PGSIZE * page_idx;
+-  else
++  else{
+     pages = NULL;
++  }
+ 
+   if (pages != NULL)
+     {
+diff -ruN aos_pintos/src/threads/thread.c pintos-solution/src/threads/thread.c
+--- aos_pintos/src/threads/thread.c	2025-04-13 01:37:15.117615469 +0000
++++ pintos-solution/src/threads/thread.c	2025-04-13 01:30:52.870156095 +0000
+@@ -13,6 +13,7 @@
+ #include "threads/vaddr.h"
+ #ifdef USERPROG
+ #include "userprog/process.h"
++#include "vm/page.h"
+ #endif
+ 
+ /* Random value for struct thread's `magic' member.
+@@ -321,9 +322,7 @@
+ int thread_get_priority (void) { return thread_current ()->priority; }
+ 
+ /* Sets the current thread's nice value to NICE. */
+-void thread_set_nice (int nice UNUSED)
+-{ /* Not yet implemented. */
+-}
++void thread_set_nice (int nice UNUSED) { /* Not yet implemented. */ }
+ 
+ /* Returns the current thread's nice value. */
+ int thread_get_nice (void)
+@@ -346,6 +345,43 @@
+   return 0;
+ }
+ 
++/* Iterate through all_list to find the thread with tid. Return the tid_t
++ * received. Return NULL if thread not found */
++struct thread *get_thread_from_tid (tid_t tid)
++{
++  enum intr_level old_level = intr_disable ();
++
++  // Finding the child thread
++  struct thread *t = NULL;
++  for (struct list_elem *e = list_begin (&all_list); e != list_end (&all_list);
++       e = list_next (e))
++    {
++      t = list_entry (e, struct thread, allelem);
++      if (t->tid == tid)
++        break;
++    }
++
++  intr_set_level (old_level); // Restore interrupts
++
++  return t;
++}
++
++/* Set child thread's parent, and parent thread's list of child threads */
++void set_parent_child_thread (struct thread *t_p, tid_t child_tid)
++{
++  struct thread *child = get_thread_from_tid (child_tid);
++  if (child == NULL)
++    return;
++
++  child->parent = t_p;
++  struct child *child_struct = palloc_get_page (PAL_ZERO);
++  child_struct->tid = child_tid;
++  child_struct->waited_on = false;
++  child->child_info = child_struct;
++  sema_init (&child_struct->wait_sema, 0);
++  list_push_back (&t_p->children, &child_struct->child_elem);
++}
++
+ /* Idle thread.  Executes when no other thread is ready to run.
+ 
+    The idle thread is initially put on the ready list by
+@@ -429,6 +465,16 @@
+   t->priority = priority;
+   t->magic = THREAD_MAGIC;
+ 
++  // Initializing for user process
++  list_init (&t->children);
++
++  page_table_init(t);
++
++  // Initializing file descriptors.
++  for (int i = 0; i < MAX_FILES; i++)
++    t->files[i] = NULL;
++  t->executable = NULL;
++
+   old_level = intr_disable ();
+   list_push_back (&all_list, &t->allelem);
+   intr_set_level (old_level);
+diff -ruN aos_pintos/src/threads/thread.h pintos-solution/src/threads/thread.h
+--- aos_pintos/src/threads/thread.h	2025-04-13 01:37:15.349617316 +0000
++++ pintos-solution/src/threads/thread.h	2025-04-13 01:30:52.870156095 +0000
+@@ -4,6 +4,7 @@
+ #include <debug.h>
+ #include <list.h>
+ #include <stdint.h>
++#include "threads/synch.h"
+ 
+ /* States in a thread's life cycle. */
+ enum thread_status
+@@ -17,13 +18,15 @@
+ /* Thread identifier type.
+    You can redefine this to whatever type you like. */
+ typedef int tid_t;
+-#define TID_ERROR ((tid_t) -1) /* Error value for tid_t. */
++#define TID_ERROR ((tid_t) - 1) /* Error value for tid_t. */
+ 
+ /* Thread priorities. */
+ #define PRI_MIN 0      /* Lowest priority. */
+ #define PRI_DEFAULT 31 /* Default priority. */
+ #define PRI_MAX 63     /* Highest priority. */
+ 
++#define MAX_FILES 32
++
+ /* A kernel thread or user process.
+ 
+    Each thread structure is stored in its own 4 kB page.  The
+@@ -100,10 +103,30 @@
+   uint32_t *pagedir; /* Page directory. */
+ #endif
+ 
++  struct thread *parent;     /* Child thread */
++  struct list children;      /* List of struct child */
++  struct child *child_info;  /* Semaphore for wait/exit synchronization. */
++
++  struct file *files[MAX_FILES]; /* Array of available FDs */
++  struct file *executable;        /* Executable file */
++
++  struct list page_table;
++  void *user_esp;
++
+   /* Owned by thread.c. */
+   unsigned magic; /* Detects stack overflow. */
+ };
+ 
++// Structure to hold child process information.
++struct child
++{
++  struct list_elem child_elem; /* For the parent's list of children. */
++  int exit_status;             /* Exit status of the child. */
++  tid_t tid;                   /* Child's TID */
++  struct semaphore wait_sema;  /* Semaphore for wait/exit synchronization. */
++  bool waited_on;              /* Has the parent waited on this child? */
++};
++
+ /* If false (default), use round-robin scheduler.
+    If true, use multi-level feedback queue scheduler.
+    Controlled by kernel command-line option "-o mlfqs". */
+@@ -140,4 +163,7 @@
+ int thread_get_recent_cpu (void);
+ int thread_get_load_avg (void);
+ 
++struct thread *get_thread_from_tid (tid_t tid);
++void set_parent_child_thread (struct thread *t_p, tid_t child_tid);
++
+ #endif /* threads/thread.h */
+diff -ruN aos_pintos/src/userprog/exception.c pintos-solution/src/userprog/exception.c
+--- aos_pintos/src/userprog/exception.c	2025-04-13 01:37:16.477626295 +0000
++++ pintos-solution/src/userprog/exception.c	2025-04-13 01:30:52.870156095 +0000
+@@ -1,9 +1,16 @@
+ #include "userprog/exception.h"
+ #include <inttypes.h>
+ #include <stdio.h>
++#include <string.h>
+ #include "userprog/gdt.h"
+ #include "threads/interrupt.h"
+ #include "threads/thread.h"
++#include "threads/vaddr.h"
++#include "userprog/pagedir.h"
++#include "userprog/syscall.h"
++#include "vm/frame.h"
++#include "vm/page.h"
++#include "vm/swap.h"
+ 
+ /* Number of page faults processed. */
+ static long long page_fault_cnt;
+@@ -127,7 +134,7 @@
+      See [IA32-v2a] "MOV--Move to/from Control Registers" and
+      [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
+      (#PF)". */
+-  asm("movl %%cr2, %0" : "=r"(fault_addr));
++  asm ("movl %%cr2, %0" : "=r"(fault_addr));
+ 
+   /* Turn interrupts back on (they were only off so that we could
+      be assured of reading CR2 before it changed). */
+@@ -141,14 +148,17 @@
+   write = (f->error_code & PF_W) != 0;
+   user = (f->error_code & PF_U) != 0;
+ 
+-  /* To implement virtual memory, delete the rest of the function
+-     body, and replace it with code that brings in the page to
+-     which fault_addr refers. */
+-  printf ("Page fault at %p: %s error %s page in %s context.\n", fault_addr,
+-          not_present ? "not present" : "rights violation",
+-          write ? "writing" : "reading", user ? "user" : "kernel");
+-
+-  printf ("There is no crying in Pintos!\n");
+-
++  if(!is_user_vaddr(fault_addr) || fault_addr == NULL){
++    exit(-1);
++  }
++
++  if (user && not_present){
++    if(!page_in (fault_addr, write)){
++      exit(-1);
++      thread_exit();
++    }
++    return;
++  }
++  exit(-1);
+   kill (f);
+ }
+diff -ruN aos_pintos/src/userprog/process.c pintos-solution/src/userprog/process.c
+--- aos_pintos/src/userprog/process.c	2025-04-13 01:37:16.397625659 +0000
++++ pintos-solution/src/userprog/process.c	2025-04-13 01:30:52.870156095 +0000
+@@ -17,9 +17,13 @@
+ #include "threads/palloc.h"
+ #include "threads/thread.h"
+ #include "threads/vaddr.h"
++#include "threads/synch.h"
++#include "userprog/syscall.h"
++#include "vm/frame.h"
++#include "vm/page.h"
+ 
+ static thread_func start_process NO_RETURN;
+-static bool load (const char *cmdline, void (**eip) (void), void **esp);
++static bool load (struct cmdline_args *args, void (**eip) (void), void **esp);
+ 
+ /* Starts a new thread running a user program loaded from
+    FILENAME.  The new thread may be scheduled (and may even exit)
+@@ -27,28 +31,74 @@
+    thread id, or TID_ERROR if the thread cannot be created. */
+ tid_t process_execute (const char *file_name)
+ {
+-  char *fn_copy;
+   tid_t tid;
++  char *save_ptr, *token;
++  struct cmdline_args *args; // struct for storing all arguments
++
++  /* Get page for storing arguments */
++  args = palloc_get_page (0);
++  if (args == NULL)
++    {
++      return TID_ERROR;
++    }
+ 
+   /* Make a copy of FILE_NAME.
+      Otherwise there's a race between the caller and load(). */
+-  fn_copy = palloc_get_page (0);
+-  if (fn_copy == NULL)
+-    return TID_ERROR;
+-  strlcpy (fn_copy, file_name, PGSIZE);
++  args->fn_copy = palloc_get_page (0);
++  if (args->fn_copy == NULL)
++    {
++      palloc_free_page (args);
++      return TID_ERROR;
++    }
++  strlcpy (args->fn_copy, file_name, PGSIZE);
++
++  /* Parsing the arguments */
++  token = strtok_r (args->fn_copy, " ", &save_ptr);
++  args->file_name = token;
++  args->argv[0] = token;
++
++  int count = 1;
++  while (token != NULL && count < MAX_ARGS - 1)
++    {
++      token = strtok_r (NULL, " ", &save_ptr);
++      if (token != NULL)
++        args->argv[count++] = token;
++    }
++  args->argv[count] = NULL;
++  args->argc = count;
++
++  sema_init (&args->load_sema, 0); // Initialize load semaphore
++  args->load_flag = false;         // Initialize load flag
+ 
+   /* Create a new thread to execute FILE_NAME. */
+-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
++  tid = thread_create (args->file_name, PRI_DEFAULT, start_process, args);
+   if (tid == TID_ERROR)
+-    palloc_free_page (fn_copy);
++    {
++      palloc_free_page (args->fn_copy);
++      palloc_free_page (args);
++      return TID_ERROR;
++    }
++
++  // Set parent and child in threads
++  struct thread *t_child = get_thread_from_tid (tid);
++  set_parent_child_thread (thread_current (), t_child->tid);
++
++  sema_down (&args->load_sema); // Wait until load semaphore is released
++
++  if (!args->load_flag)
++    tid = TID_ERROR;
++
++  palloc_free_page (args->fn_copy);
++  palloc_free_page (args);
++
+   return tid;
+ }
+ 
+ /* A thread function that loads a user process and starts it
+    running. */
+-static void start_process (void *file_name_)
++static void start_process (void *args_)
+ {
+-  char *file_name = file_name_;
++  struct cmdline_args *args = args_;
+   struct intr_frame if_;
+   bool success;
+ 
+@@ -57,10 +107,12 @@
+   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
+   if_.cs = SEL_UCSEG;
+   if_.eflags = FLAG_IF | FLAG_MBS;
+-  success = load (file_name, &if_.eip, &if_.esp);
++  success = load (args, &if_.eip, &if_.esp);
++
++  args->load_flag = success;
++  sema_up (&args->load_sema); // Release load semaphore
+ 
+   /* If load failed, quit. */
+-  palloc_free_page (file_name);
+   if (!success)
+     thread_exit ();
+ 
+@@ -70,7 +122,7 @@
+      arguments on the stack in the form of a `struct intr_frame',
+      we just point the stack pointer (%esp) to our stack frame
+      and jump to it. */
+-  asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
++  asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
+   NOT_REACHED ();
+ }
+ 
+@@ -83,7 +135,37 @@
+ 
+    This function will be implemented in problem 2-2.  For now, it
+    does nothing. */
+-int process_wait (tid_t child_tid UNUSED) { return -1; }
++int process_wait (tid_t child_tid UNUSED)
++{
++  struct thread *cur = thread_current ();
++  struct child *child = NULL;
++
++  // Find the child thread from its parent threads
++  for (struct list_elem *e = list_begin (&cur->children);
++       e != list_end (&cur->children); e = list_next (e))
++    {
++      child = list_entry (e, struct child, child_elem);
++      if (child->tid == child_tid)
++        break;
++    }
++
++  // Fail if no child process with the tid is found or if the child thread is
++  // already being waited
++  if (child == NULL || child->waited_on)
++    return -1;
++
++  child->waited_on = true;
++
++  list_remove (&child->child_elem); // Remove the exited child process from the
++                                    // child thread list
++
++  sema_down (&child->wait_sema); // Waiting for the child to exit
++
++  int exit_status = child->exit_status; // Storing the child's exit status
++  palloc_free_page (child);
++
++  return exit_status; // Returning child's exit status
++}
+ 
+ /* Free the current process's resources. */
+ void process_exit (void)
+@@ -91,6 +173,28 @@
+   struct thread *cur = thread_current ();
+   uint32_t *pd;
+ 
++  // Clean up any remaining children.  This is the key addition.
++  struct list_elem *e;
++  while (!list_empty (&cur->children))
++    {
++      e = list_pop_front (&cur->children);
++      struct child *child = list_entry (e, struct child, child_elem);
++
++      list_remove (&child->child_elem); // remove from parent's child list
++      palloc_free_page (child);         // Free child's thread.
++    }
++
++  // Close all open files
++  clear_all_files(cur);
++
++  // Allow waiting parent to continue (if any)
++  sema_up (&cur->child_info->wait_sema);
++
++  if (cur->executable != NULL)
++    {
++      file_close (cur->executable);
++    }
++
+   /* Destroy the current process's page directory and switch back
+      to the kernel-only page directory. */
+   pd = cur->pagedir;
+@@ -187,7 +291,7 @@
+ #define PF_W 2 /* Writable. */
+ #define PF_R 4 /* Readable. */
+ 
+-static bool setup_stack (void **esp);
++static bool setup_stack (void **esp, const struct cmdline_args *args);
+ static bool validate_segment (const struct Elf32_Phdr *, struct file *);
+ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+                           uint32_t read_bytes, uint32_t zero_bytes,
+@@ -197,7 +301,7 @@
+    Stores the executable's entry point into *EIP
+    and its initial stack pointer into *ESP.
+    Returns true if successful, false otherwise. */
+-bool load (const char *file_name, void (**eip) (void), void **esp)
++bool load (struct cmdline_args *args, void (**eip) (void), void **esp)
+ {
+   struct thread *t = thread_current ();
+   struct Elf32_Ehdr ehdr;
+@@ -213,10 +317,11 @@
+   process_activate ();
+ 
+   /* Open executable file. */
+-  file = filesys_open (file_name);
++  file = filesys_open (args->file_name);
++
+   if (file == NULL)
+     {
+-      printf ("load: %s: open failed\n", file_name);
++      printf ("load: %s: open failed\n", args->file_name);
+       goto done;
+     }
+ 
+@@ -226,7 +331,7 @@
+       ehdr.e_machine != 3 || ehdr.e_version != 1 ||
+       ehdr.e_phentsize != sizeof (struct Elf32_Phdr) || ehdr.e_phnum > 1024)
+     {
+-      printf ("load: %s: error loading executable\n", file_name);
++      printf ("load: %s: error loading executable\n", args->file_name);
+       goto done;
+     }
+ 
+@@ -291,7 +396,7 @@
+     }
+ 
+   /* Set up stack. */
+-  if (!setup_stack (esp))
++  if (!setup_stack (esp, args))
+     goto done;
+ 
+   /* Start address. */
+@@ -300,8 +405,16 @@
+   success = true;
+ 
+ done:
+-  /* We arrive here whether the load is successful or not. */
+-  file_close (file);
++  if (success)
++    {
++      file_deny_write (file);
++      t->executable = file;
++    }
++  else
++    {
++      file_close (file);
++      t->executable = NULL;
++      }
+   return success;
+ }
+ 
+@@ -374,7 +487,9 @@
+   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
+   ASSERT (pg_ofs (upage) == 0);
+   ASSERT (ofs % PGSIZE == 0);
+-
++  
++  struct thread *t = thread_current();
++  
+   file_seek (file, ofs);
+   while (read_bytes > 0 || zero_bytes > 0)
+     {
+@@ -385,49 +500,95 @@
+       size_t page_zero_bytes = PGSIZE - page_read_bytes;
+ 
+       /* Get a page of memory. */
+-      uint8_t *kpage = palloc_get_page (PAL_USER);
+-      if (kpage == NULL)
++      struct page_entry *p = page_allocate(upage, writable);
++      if (!p){
+         return false;
++      }
++	
++      if(page_read_bytes > 0){
++	p->file = file;
++	p->file_offset = ofs;
++	p->read_bytes = page_read_bytes;
++      }
+ 
+-      /* Load this page. */
+-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+-        {
+-          palloc_free_page (kpage);
+-          return false;
+-        }
+-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
+-
+-      /* Add the page to the process's address space. */
+-      if (!install_page (upage, kpage, writable))
+-        {
+-          palloc_free_page (kpage);
+-          return false;
+-        }
+-
+-      /* Advance. */
+       read_bytes -= page_read_bytes;
+       zero_bytes -= page_zero_bytes;
++      ofs += page_read_bytes;
+       upage += PGSIZE;
+     }
++
+   return true;
+ }
+ 
+ /* Create a minimal stack by mapping a zeroed page at the top of
+    user virtual memory. */
+-static bool setup_stack (void **esp)
++static bool setup_stack (void **esp, const struct cmdline_args *args)
+ {
+   uint8_t *kpage;
+   bool success = false;
+-
+-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+-  if (kpage != NULL)
++  void *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
++  
++  struct page_entry *stack_page = page_allocate(upage, true);
++  if (stack_page == NULL)
++    return success;
++
++  struct frame_entry *f = frame_alloc(stack_page);
++  if(f == NULL){
++    return success;
++  }
++
++  kpage = f->base;
++  
++  success = install_page (upage, kpage, true);
++  if (!success)
++    {
++      page_deallocate(upage);
++      return success;
++    }
++  
++  stack_page->upage = upage;
++  stack_page->type = PAGE_STACK;
++  stack_page->writable = true;
++  stack_page->frame = f;
++
++  frame_unlock(f);
++  /* Pushing arguments to stack */
++  uint8_t *tos = PHYS_BASE;   // Top of stack
++  char *args_ptr[args->argc]; // pointers to arguments in the stack
++  size_t args_len;
++  
++  for (int i = args->argc - 1; i >= 0; i--)
+     {
+-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+-      if (success)
+-        *esp = PHYS_BASE;
+-      else
+-        palloc_free_page (kpage);
++      args_len = strlen (args->argv[i]) + 1; // + 1 for null termination
++      tos -= args_len;
++      memcpy (tos, args->argv[i], args_len);
++      args_ptr[i] = (char *) tos;
+     }
++  tos = (uint8_t *) ((uintptr_t) tos & ~3); // Adding 0 for word-align
++  
++  tos -= sizeof (char *); // Adding null pointer sentinel
++  *(char **) tos = NULL;
++  
++  for (int i = args->argc - 1; i >= 0; i--) // Storing argument addresses
++    {
++      tos -= sizeof (char *);
++      *(char **) tos = args_ptr[i];
++    }
++
++  tos -= sizeof (char **); // Storing argument array ptr
++  *(char ***) tos = (char **) (tos + sizeof (char **));
++
++  tos -= sizeof (int); // Storing argc
++  *(int *) tos = args->argc;
++
++  tos -= sizeof (void *); // Storing return address
++  *(void **) tos = NULL;
++
++  *esp = tos;
++
++  // hex_dump((uintptr_t) tos, (void *)tos, LOADER_PHYS_BASE - (uintptr_t) tos,
++  // true); // Debugging
++
+   return success;
+ }
+ 
+diff -ruN aos_pintos/src/userprog/process.h pintos-solution/src/userprog/process.h
+--- aos_pintos/src/userprog/process.h	2025-04-13 01:37:16.625627473 +0000
++++ pintos-solution/src/userprog/process.h	2025-04-13 01:30:52.870156095 +0000
+@@ -2,10 +2,26 @@
+ #define USERPROG_PROCESS_H
+ 
+ #include "threads/thread.h"
++#include "threads/synch.h"
++
++#define MAX_ARGS 32 // Defining a maximum number of arguments
+ 
+ tid_t process_execute (const char *file_name);
+ int process_wait (tid_t);
+ void process_exit (void);
+ void process_activate (void);
+ 
++/* Structure to pass arguments to the new thread. */
++struct cmdline_args
++{
++  char *file_name;      // Executable name
++  char *argv[MAX_ARGS]; // Array of argument strings
++  int argc;             // Number of arguments
++
++  char *fn_copy; // ptr to the copied command line
++
++  struct semaphore load_sema; // Semaphore for synchronization while loading
++  bool load_flag;             // True if successfully loaded
++};
++
+ #endif /* userprog/process.h */
+diff -ruN aos_pintos/src/userprog/syscall.c pintos-solution/src/userprog/syscall.c
+--- aos_pintos/src/userprog/syscall.c	2025-04-13 01:37:16.549626867 +0000
++++ pintos-solution/src/userprog/syscall.c	2025-04-13 01:30:52.870156095 +0000
+@@ -2,18 +2,561 @@
+ #include <stdio.h>
+ #include <syscall-nr.h>
+ #include "devices/block.h"
++#include "devices/input.h"
+ #include "threads/interrupt.h"
+ #include "threads/thread.h"
++#include "threads/vaddr.h"
++#include "userprog/pagedir.h"
++#include "devices/shutdown.h"
++#include <debug.h>
++#include <string.h>
++#include "userprog/process.h"
++#include "filesys/filesys.h"
++#include "filesys/file.h"
++#include "vm/page.h"
+ 
+ static void syscall_handler (struct intr_frame *);
+ 
++static void sys_halt (void);
++static void sys_exit (struct intr_frame *);
++static void sys_exec (struct intr_frame *);
++static void sys_wait (struct intr_frame *);
++static void sys_create (struct intr_frame *);
++static void sys_remove (struct intr_frame *);
++static void sys_open (struct intr_frame *);
++static void sys_filesize (struct intr_frame *);
++static void sys_read (struct intr_frame *);
++static void sys_write (struct intr_frame *);
++static void sys_seek (struct intr_frame *);
++static void sys_tell (struct intr_frame *);
++static void sys_close (struct intr_frame *);
++static void sys_symlink (struct intr_frame *);
++
++static int get_user (const uintptr_t uaddr, size_t size, void *dest);
++static bool is_user_ptr_valid (const uintptr_t ptr, size_t size);
++
++struct lock file_lock;
++
+ void syscall_init (void)
+ {
+   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
++  lock_init (&file_lock);
+ }
+ 
+ static void syscall_handler (struct intr_frame *f UNUSED)
+ {
+-  printf ("system call!\n");
++  uint32_t syscall_num;
++  if (!is_user_vaddr (f->esp) ||
++      get_user ((uintptr_t) f->esp, sizeof (syscall_num), &syscall_num) == -1)
++    exit (-1);
++
++  switch (syscall_num)
++    {
++      case SYS_HALT: /* Halt the operating system. */
++        sys_halt ();
++        break;
++      case SYS_EXIT: /* Terminate this process. */
++        sys_exit (f);
++        break;
++      case SYS_EXEC: /* Start another process. */
++        sys_exec (f);
++        break;
++      case SYS_WAIT: /* Wait for a child process to die. */
++        sys_wait (f);
++        break;
++      case SYS_CREATE: /* Create a file. */
++        sys_create (f);
++        break;
++      case SYS_REMOVE: /* Delete a file. */
++        sys_remove (f);
++        break;
++      case SYS_OPEN: /* Open a file. */
++        sys_open (f);
++        break;
++      case SYS_FILESIZE: /* Obtain a file's size. */
++        sys_filesize (f);
++        break;
++      case SYS_READ: /* Read from a file. */
++        sys_read (f);
++        break;
++      case SYS_WRITE: /* Write to a file. */
++        sys_write (f);
++        break;
++      case SYS_SEEK: /* Change position in a file. */
++        sys_seek (f);
++        break;
++      case SYS_TELL: /* Report current position in a file. */
++        sys_tell (f);
++        break;
++      case SYS_CLOSE: /* Close a file. */
++        sys_close (f);
++        break;
++      case SYS_SYMLINK: /* Create soft link */
++        sys_symlink (f);
++        break;
++
++      default:
++        exit (-1);
++        break;
++    }
++}
++static void sys_halt (void) { shutdown_power_off (); }
++
++static void sys_exit (struct intr_frame *f)
++{
++  int status;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &status) == -1)
++    {
++      exit (-1);
++      return;
++    }
++  exit (status);
++}
++
++/* Helper function used to exit with status */
++void exit (int status)
++{
++  struct thread *cur = thread_current ();
++  if (cur->child_info != NULL)
++    cur->child_info->exit_status = status;
++  printf ("%s: exit(%d)\n", cur->name, status);
++
+   thread_exit ();
+-}
+\ No newline at end of file
++}
++
++static void sys_exec (struct intr_frame *f)
++{
++  char *cmd_line;
++  int buf_len = 128;
++  char buf[buf_len];
++
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (char *), &cmd_line) == -1 ||
++      !is_user_vaddr (cmd_line))
++    {
++      exit (-1);
++      return;
++    }
++
++  if (get_user ((uintptr_t) cmd_line, buf_len, (void *) buf) == -1)
++    {
++      exit (-1);
++      return;
++    }
++  buf[buf_len - 1] = '\0'; // Null termination
++
++  tid_t tid = process_execute (buf);
++
++  if (tid == TID_ERROR)
++    f->eax = -1;
++  else
++    f->eax = tid;
++}
++
++static void sys_wait (struct intr_frame *f)
++{
++  tid_t pid;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (tid_t), &pid) == -1)
++    {
++      exit (-1);
++      return;
++    }
++  f->eax = process_wait (pid);
++}
++
++static void sys_create (struct intr_frame *f)
++{
++  char *file;
++  unsigned initial_size;
++  bool out;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (char *), &file) == -1 ||
++      get_user ((uintptr_t) f->esp + 8, sizeof (unsigned), &initial_size) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  if (file == NULL || !is_user_ptr_valid ((uintptr_t) file, sizeof (char *)))
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  out = filesys_create (file, initial_size);
++  lock_release (&file_lock);
++
++  f->eax = out;
++}
++
++static void sys_remove (struct intr_frame *f)
++{
++  char *file;
++  bool out;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (char *), &file) == -1 ||
++      file == NULL || !is_user_ptr_valid ((uintptr_t) file, sizeof (char *)))
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  out = filesys_remove (file);
++  lock_release (&file_lock);
++
++  f->eax = out;
++}
++
++static void sys_open (struct intr_frame *f)
++{
++  char *file;
++  int fd = -1;
++  struct file *file_opened;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (char *), &file) == -1 ||
++      file == NULL || !is_user_ptr_valid ((uintptr_t) file, sizeof (char *)))
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  file_opened = filesys_open (file);
++  lock_release (&file_lock);
++
++  if (file_opened == NULL)
++    {
++      f->eax = -1;
++      return;
++    }
++
++  struct thread *cur = thread_current ();
++  for (int i = 2; i < MAX_FILES; i++)
++    {
++      if (cur->files[i] == NULL)
++        {
++          cur->files[i] = file_opened;
++          fd = i;
++          break;
++        }
++    }
++
++  if (fd == -1)
++    {
++      lock_acquire (&file_lock);
++      file_close (file_opened);
++      lock_release (&file_lock);
++    }
++
++  f->eax = fd;
++}
++
++static void sys_filesize (struct intr_frame *f)
++{
++  int fd;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  if (fd < 0 || fd >= MAX_FILES || thread_current ()->files[fd] == NULL)
++    {
++      f->eax = -1;
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  f->eax = file_length (thread_current ()->files[fd]);
++  lock_release (&file_lock);
++}
++
++static void sys_read (struct intr_frame *f)
++{
++  int fd;
++  void *buffer;
++  unsigned size;
++  int out;
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1 ||
++      get_user ((uintptr_t) f->esp + 8, sizeof (void *), &buffer) == -1 ||
++      get_user ((uintptr_t) f->esp + 12, sizeof (unsigned), &size) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  // Ensure buffer is valid and does not wrap around
++  if (buffer == NULL || (uintptr_t) buffer + size < (uintptr_t) buffer)
++    {
++      exit (-1);
++      return;
++    }
++
++  // Touch each page to ensure it's loaded into memory (trigger page fault if needed)
++  uint8_t *buf_ptr = (uint8_t *) buffer;
++  for (unsigned offset = 0; offset < size; offset += PGSIZE)
++    {
++      uint8_t tmp;
++      if (get_user ((uintptr_t)(buf_ptr + offset), 1, &tmp) == -1)
++	{
++	  exit (-1);
++	  return;
++	}
++    }
++
++  if (size > 0)
++    {
++      uint8_t tmp;
++
++      if (get_user((uintptr_t)(buf_ptr + size - 1), 1, &tmp) == -1)
++	{
++	  exit(-1);
++	  return;
++	}
++    }
++
++  lock_acquire (&file_lock);
++
++  if (fd == 0) // STDIN_FILENO
++    {
++      uint8_t *byte_buf = (uint8_t *) buffer;
++      for (int i = 0; i < (int) size; i++)
++        {
++          byte_buf[i] = input_getc ();
++        }
++      out = size; // Set the return value to bytes read
++    }
++  else
++    {
++      struct thread *cur = thread_current ();
++      if (fd < 0 || fd >= MAX_FILES || cur->files[fd] == NULL)
++        {
++          lock_release (&file_lock);
++          f->eax = -1;
++          return;
++        }
++      // Read file
++      out = file_read (cur->files[fd], buffer, size);
++    }
++
++  lock_release (&file_lock);
++  f->eax = out; // Return number of bytes read
++}
++
++static void sys_write (struct intr_frame *f)
++{
++  int fd;
++  const void *buffer;
++  unsigned size;
++  int out;
++  // Retrieve the arguments using get_user
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1 ||
++      get_user ((uintptr_t) f->esp + 8, sizeof (void *), &buffer) == -1 ||
++      get_user ((uintptr_t) f->esp + 12, sizeof (unsigned), &size) == -1)
++    {
++      exit (-1); // Exit on invalid pointer
++      return;
++    }
++
++  if (!is_user_ptr_valid ((uintptr_t) buffer, size))
++    {
++      exit (-1);
++      return;
++    }
++
++  if (fd == 1) // STDOUT_FILENO
++    {
++      putbuf (buffer, size);
++      out = size;   // Set the return value to bytes written
++      f->eax = out; // Return number of bytes written
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  struct thread *cur = thread_current ();
++
++  if (fd < 0 || fd >= MAX_FILES || cur->files[fd] == NULL) // Invalid fd
++    {
++      lock_release (&file_lock);
++      f->eax = -1;
++      return;
++    }
++
++  // write to file if fd is valid
++  out = file_write (cur->files[fd], buffer, size);
++
++  lock_release (&file_lock);
++  f->eax = out; // Return number of bytes written
++}
++
++static void sys_seek (struct intr_frame *f)
++{
++  int fd;
++  unsigned position;
++
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1 ||
++      get_user ((uintptr_t) f->esp + 8, sizeof (unsigned), &position) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  struct thread *cur = thread_current ();
++
++  if (fd < 0 || fd >= MAX_FILES || cur->files[fd] == NULL) // Invalid fd
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  file_seek (cur->files[fd], position);
++  lock_release (&file_lock);
++}
++
++static void sys_tell (struct intr_frame *f)
++{
++  int fd;
++  unsigned out = 0;
++
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  struct thread *cur = thread_current ();
++  if (fd < 0 || fd >= MAX_FILES || cur->files[fd] == NULL) // Invalid fd
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  out = file_tell (cur->files[fd]);
++  lock_release (&file_lock);
++
++  f->eax = out; // Return the position.
++}
++
++static void sys_close (struct intr_frame *f)
++{
++  int fd;
++
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (int), &fd) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  struct thread *cur = thread_current ();
++  if (fd < 0 || fd >= MAX_FILES || cur->files[fd] == NULL) // Invalid fd
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++  file_close (cur->files[fd]);
++  cur->files[fd] = NULL; // Clear the fd.
++  lock_release (&file_lock);
++}
++
++static void sys_symlink (struct intr_frame *f)
++{
++  char *target;
++  char *linkpath;
++
++  int out = -1; // Assuming failure (-1)
++
++  if (get_user ((uintptr_t) f->esp + 4, sizeof (char **), &target) == -1 ||
++      get_user ((uintptr_t) f->esp + 8, sizeof (char **), &linkpath) == -1)
++    {
++      exit (-1);
++      return;
++    }
++
++  if (target == NULL ||
++      !is_user_ptr_valid ((uintptr_t) target, sizeof (char *)))
++    {
++      exit (-1);
++      return;
++    }
++
++  if (linkpath == NULL ||
++      !is_user_ptr_valid ((uintptr_t) linkpath, sizeof (char *)))
++    {
++      exit (-1);
++      return;
++    }
++
++  lock_acquire (&file_lock);
++
++  // Check if target file can be opened
++  struct file *target_file = filesys_open (target);
++  if (target_file == NULL)
++    {
++      lock_release (&file_lock);
++      f->eax = -1;
++      return;
++    }
++  file_close (target_file);
++
++  if (filesys_symlink (target, linkpath))
++    out = 0;
++  lock_release (&file_lock);
++
++  f->eax = out;
++}
++
++/* Reads (size) bytes from uaddr to dest. Returns -1 if failed, 0 if successful
++ */
++static int get_user (const uintptr_t uaddr, size_t size, void *dest)
++{
++
++  if (!is_user_vaddr((void *)uaddr) || !is_user_vaddr ((void *) (uaddr + size - 1))){
++    return -1;
++  }
++  
++  if (!is_user_ptr_valid (uaddr, size)){
++    if(!page_in(uaddr, false)){
++      return -1;
++    }
++  }
++
++  memcpy (dest, (void *) uaddr, size);
++  return 0;
++}
++
++/* Check if the user pointer is in the correct size */
++static bool is_user_ptr_valid (const uintptr_t ptr, size_t size)
++{
++  
++  if ((void *) ptr == NULL)
++    return false;
++
++  // Is mappable to physical address?
++  void *pagedir_start = pagedir_get_page (thread_current ()->pagedir, (void *) ptr);
++  void *pagedir_end = pagedir_get_page (thread_current ()->pagedir, (void *) (ptr + size - 1));
++
++  if (pagedir_start == NULL || pagedir_end == NULL)
++    {
++      return false;
++    }
++  return true;
++}
++
++/* Clears all open files in a given thread. */
++void clear_all_files (struct thread *cur)
++{
++  //lock_acquire (&file_lock);
++
++  // Iterate all files in current thread
++  for (int i = 2; i < MAX_FILES; i++)
++    {
++      if (cur->files[i] != NULL)
++        {
++          file_close (cur->files[i]);
++          cur->files[i] = NULL;
++        }
++    }
++  //lock_release (&file_lock);
++}
+diff -ruN aos_pintos/src/userprog/syscall.h pintos-solution/src/userprog/syscall.h
+--- aos_pintos/src/userprog/syscall.h	2025-04-13 01:37:16.717628205 +0000
++++ pintos-solution/src/userprog/syscall.h	2025-04-13 01:30:52.870156095 +0000
+@@ -2,7 +2,10 @@
+ #define USERPROG_SYSCALL_H
+ 
+ #include <stdbool.h>
++#include "threads/thread.h"
+ 
+ void syscall_init (void);
++void exit (int status);
++void clear_all_files(struct thread *cur);
+ 
+ #endif /* userprog/syscall.h */
+diff -ruN aos_pintos/src/vm/frame.c pintos-solution/src/vm/frame.c
+--- aos_pintos/src/vm/frame.c	2025-04-13 01:37:15.053614959 +0000
++++ pintos-solution/src/vm/frame.c	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,112 @@
++#include "vm/frame.h"
++#include <stdlib.h>
++#include <stdio.h>
++#include <stdbool.h>
++
++#include "filesys/file.h"
++#include "threads/malloc.h"
++#include "threads/palloc.h"
++#include "threads/thread.h"
++#include "threads/synch.h"
++#include "devices/timer.h"
++#include "userprog/pagedir.h"
++#include "vm/swap.h"
++#include "lib/kernel/list.h"
++
++#define MAX_FRAMES 2048
++
++static struct frame_entry frame_table[MAX_FRAMES];
++static size_t frame_count = 0;
++
++static struct list frame_list;
++static struct lock frames_lock;
++
++void frame_table_init(void){
++  list_init(&frame_list);
++  lock_init(&frames_lock);
++
++  void *base;
++  while ((base = palloc_get_page(PAL_USER)) != NULL && frame_count < MAX_FRAMES) {
++    struct frame_entry *f = &frame_table[frame_count++];
++    f->base = base;
++    f->page = NULL;
++    f->owner = NULL;
++    lock_init (&f->lock);
++    list_push_back(&frame_list, &f->frame_elem);
++  }
++}
++
++struct frame_entry *frame_alloc(struct page_entry *page){
++  size_t try;
++  struct list_elem *e;
++
++  for(try = 0; try < 3; try++){
++    lock_acquire(&frames_lock);
++
++    for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)){
++      struct frame_entry *f_entry = list_entry(e, struct frame_entry, frame_elem);
++
++      if(!lock_try_acquire (&f_entry->lock)){
++	continue;
++      }
++      
++      if(f_entry->page == NULL){
++	f_entry->page = page;
++	lock_release(&frames_lock);
++	return f_entry;
++      }
++      lock_release(&f_entry->lock);
++    }
++
++    for(e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)){
++      struct frame_entry *f_entry = list_entry(e, struct frame_entry, frame_elem);
++
++      if(!lock_try_acquire (&f_entry->lock)){
++	continue;
++      }
++      
++      if(f_entry->page == NULL){
++	f_entry->page = page;
++	lock_release(&frames_lock);
++	return f_entry;
++      }
++
++      if(page_relevant(f_entry->page)){
++	lock_release(&f_entry->lock);
++	continue;
++      }
++
++      lock_release(&frames_lock);
++
++      if(!page_out(f_entry->page)){
++	lock_release(&f_entry->lock);
++	return NULL;
++      }
++
++      f_entry->page = page;
++      return f_entry;
++    }
++    lock_release(&frames_lock);
++    timer_msleep(1000);
++  }
++  return NULL;
++}
++
++void frame_lock(struct page_entry *p){
++  struct frame_entry *f = p->frame;
++  if(f != NULL){
++    lock_acquire(&f->lock);
++  }
++}
++
++void frame_free(struct frame_entry *f){
++  ASSERT (lock_held_by_current_thread(&f->lock));
++
++  f->page = NULL;
++  lock_release(&f->lock);
++}
++
++void frame_unlock(struct frame_entry *f){
++  ASSERT (lock_held_by_current_thread (&f->lock));
++  lock_release(&f->lock);
++}
+diff -ruN aos_pintos/src/vm/frame.h pintos-solution/src/vm/frame.h
+--- aos_pintos/src/vm/frame.h	2025-04-13 01:37:14.933614003 +0000
++++ pintos-solution/src/vm/frame.h	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,28 @@
++#ifndef VM_FRAME_H
++#define VM_FRAME_H
++
++#include "threads/synch.h"
++#include "lib/kernel/list.h"
++#include "threads/thread.h"
++#include "threads/palloc.h"
++#include "vm/page.h"
++
++struct frame_entry {
++  void *base;
++  struct page_entry *page;
++  struct lock lock;
++  struct thread *owner;
++  struct list_elem frame_elem;
++};
++
++void frame_table_init(void);
++
++struct frame_entry *frame_alloc(struct page_entry *page);
++
++void frame_free(struct frame_entry *f);
++
++void frame_lock(struct page_entry *p);
++
++void frame_unlock(struct frame_entry *f);
++
++#endif
+diff -ruN aos_pintos/src/vm/page.c pintos-solution/src/vm/page.c
+--- aos_pintos/src/vm/page.c	2025-04-13 01:37:14.969614290 +0000
++++ pintos-solution/src/vm/page.c	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,217 @@
++#include "vm/page.h"
++#include "threads/malloc.h"
++#include "threads/thread.h"
++#include "threads/synch.h"
++#include "userprog/pagedir.h"
++#include "vm/swap.h"
++#include "threads/vaddr.h"
++#include <string.h>
++#include <stdio.h>
++
++#define STACK_MAX (4 * 1024 * 1024)
++
++void page_table_init(struct thread *t){
++  list_init(&t->page_table);
++}
++
++struct page_entry *page_lookup(const void *addr){
++  struct list_elem *e;
++  struct thread *t = thread_current();
++  
++  for(e = list_begin(&t->page_table); e != list_end(&t->page_table); e = list_next(e)){
++    struct page_entry *entry = list_entry(e, struct page_entry, page_elem);
++    if (entry->upage == pg_round_down(addr)){
++      return entry;
++    }
++  }
++  
++  if (addr < PHYS_BASE) {
++    void *upage = pg_round_down(addr);
++
++    uintptr_t phys_base = (uintptr_t)PHYS_BASE;
++    uintptr_t stack_max = (uintptr_t)STACK_MAX;
++    uintptr_t upage_addr = (uintptr_t)upage;
++
++    /*if ((upage_addr > phys_base - stack_max) && ((uint8_t *)thread_current()->user_esp - 32 < addr)) {
++      return page_allocate(upage, true);
++      }*/
++
++    if ((uintptr_t)addr >= (uintptr_t)(PHYS_BASE) - STACK_MAX && (uintptr_t)addr < (uintptr_t)PHYS_BASE)  {
++
++      if ((uintptr_t)addr < (uintptr_t)thread_current()->user_esp - (PGSIZE/2)) {
++	exit(-1);
++      }
++      
++      return page_allocate(upage, true);
++    }
++    
++  }
++
++  return NULL;
++}
++
++bool page_in(void *fault_addr, bool write){
++  struct thread *t = thread_current();
++  void *upage = pg_round_down(fault_addr);
++  
++  // Find the page in the thread's page list
++  struct page_entry *p = page_lookup(fault_addr);
++
++  if(write){
++    if(!p->writable){
++      exit(-1);
++    }
++  }
++  
++  if (p == NULL) {
++    return false;
++  }
++
++  // Allocate a frame
++  p->frame = frame_alloc(p);
++  if (p->frame == NULL) {
++    return false;
++  }
++
++  if (p->frame == NULL || p->frame->base == NULL) {
++    printf("Invalid frame for page %p\n", p->upage);
++    frame_unlock(p->frame);
++    return false; // Return false if the frame is not valid
++  }
++
++  // Check if the page is already mapped, and skip the mapping if it is
++  if (pagedir_get_page(t->pagedir, p->upage) != NULL) {
++    // The page is already mapped, no need to map it again
++    frame_unlock(p->frame);
++    return false; // Return false without attempting to map the page
++  }
++
++  // Load the data into the frame
++  if (p->in_swap) {
++    swap_in(p);
++  } else if (p->file != NULL) {
++    off_t read_bytes = file_read_at (p->file, p->frame->base, p->read_bytes, p->file_offset);
++    off_t zero_bytes = PGSIZE - read_bytes;
++    memset ((uint8_t *)p->frame->base + read_bytes, 0, zero_bytes);
++  } else {
++    memset(p->frame->base, 0, PGSIZE);
++  }
++  
++  // Install the page into the page directory
++  if (!pagedir_set_page(t->pagedir, p->upage, p->frame->base, p->writable)) {
++    printf("pagedir_set_page failed for %p\n", upage);
++    frame_unlock(p->frame);
++    return false;
++  }
++
++  frame_unlock (p->frame);
++  return true;
++}
++
++bool page_out(struct page_entry *p){
++  bool dirty;
++  bool ok = false;
++
++  dirty = pagedir_is_dirty(p->thread->pagedir, (const void *) p->upage);
++
++  pagedir_clear_page(p->thread->pagedir, (void *) p->upage);
++
++  if(!dirty){
++    ok = true;
++  }
++
++  if(p->file == NULL){
++    ok = swap_out(p);
++  }else{
++    if(dirty){
++      if(!p->writable){
++	ok = swap_out(p);
++      }else{
++	ok = file_write_at(p->file, (const void *)p->frame->base, p->read_bytes, p->file_offset);
++      }
++    }
++  }
++
++  if(ok){
++    p->frame = NULL;
++  }
++  return ok;
++}
++
++bool page_relevant(struct page_entry *p){
++  if(pagedir_is_accessed(p->thread->pagedir, p->upage)){
++    pagedir_set_accessed(p->thread->pagedir, p->upage, false);
++  }
++  return pagedir_is_accessed(p->thread->pagedir, p->upage);
++}
++
++struct page_entry *page_allocate(void *uaddr, bool writable){
++  struct thread *t = thread_current();
++  struct page_entry *p = palloc_get_page(PAL_ZERO);
++  //struct page_entry *p = malloc(sizeof(struct page_entry));
++  
++  if(p != NULL){
++    p->upage = pg_round_down(uaddr);
++    p->writable = writable;
++    p->frame = NULL;
++
++    p->in_swap = false;
++    p->swap_index = (size_t) -1;
++
++    p->file = NULL;
++    p->file_offset = 0;
++    p->read_bytes = 0;
++    p->zero_bytes = 0;
++
++    p->type = PAGE_ZERO;
++    p->thread = t;
++
++    list_push_back(&t->page_table, &p->page_elem);
++  }
++
++  return p;
++}
++
++void page_deallocate(void *uaddr){
++  struct page_entry *p = page_lookup(uaddr);
++  frame_lock(p);
++  if(p->frame){
++    struct frame_entry *f = p->frame;
++    if(p->file && p->writable){
++      page_out(p);
++    }
++    frame_free(f);
++  }
++  list_remove(&p->page_elem);
++  palloc_free_page(p);
++  //free(p);
++}
++
++bool page_lock(const void *uaddr, bool write){
++  struct page_entry *p = page_lookup(uaddr);
++  if(p == NULL ||(!p->writable && write)){
++    return false;
++  }
++
++  frame_lock(p);
++  if(p->frame == NULL){
++    return(page_in(p, write) && pagedir_set_page(thread_current()->pagedir, p->upage, p->frame->base, p->writable));
++  }else{
++    return true;
++  }
++}
++
++void page_unlock(const void *uaddr){
++  struct page_entry *p = page_lookup(uaddr);
++  ASSERT (p != NULL);
++  frame_unlock(p->frame);
++}
++
++void page_table_destroy(struct thread *t){
++  struct list_elem *e;
++  while(!list_empty(&t->page_table)){
++    e = list_pop_front(&t->page_table);
++    struct page_entry *entry = list_entry(e, struct page_entry, page_elem);
++    free(entry);
++  }
++}
+diff -ruN aos_pintos/src/vm/page.h pintos-solution/src/vm/page.h
+--- aos_pintos/src/vm/page.h	2025-04-13 01:37:14.901613749 +0000
++++ pintos-solution/src/vm/page.h	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,43 @@
++#ifndef VM_PAGE_H
++#define VM_PAGE_H
++
++#include <list.h>
++#include <stdbool.h>
++#include "filesys/file.h"
++#include "threads/thread.h"
++#include "vm/frame.h"
++
++enum page_type {
++  PAGE_FILE,
++  PAGE_ZERO,
++  PAGE_STACK
++};
++
++struct page_entry {
++  void *upage;
++  struct thread *thread;
++  struct frame_entry *frame;
++  enum page_type type;
++  struct file *file;
++  off_t file_offset;
++  size_t read_bytes;
++  size_t zero_bytes;
++  bool writable;
++  bool in_swap;
++  size_t swap_index;
++  struct list_elem page_elem;
++};
++
++struct page_entry *page_lookup(const void *addr);
++
++void page_table_init(struct thread *t);
++struct page_entry *page_allocate(void *uaddr, bool writable);
++void page_deallocate(void *uaddr);
++bool page_in(void *fault_addr, bool write);
++bool page_out(struct page_entry *p);
++bool page_relevant(struct page_entry *p);
++bool page_lock(const void *uaddr, bool write);
++void page_unlock(const void *uaddr);
++void page_table_destroy(struct thread *t);
++
++#endif
+diff -ruN aos_pintos/src/vm/swap.c pintos-solution/src/vm/swap.c
+--- aos_pintos/src/vm/swap.c	2025-04-13 01:37:15.069615086 +0000
++++ pintos-solution/src/vm/swap.c	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,72 @@
++#include "vm/swap.h"
++#include "devices/block.h"
++#include "threads/vaddr.h"
++#include "threads/synch.h"
++#include "vm/frame.h"
++#include <bitmap.h>
++#include <debug.h>
++
++#define PAGE_SECTORS (PGSIZE/ BLOCK_SECTOR_SIZE)
++
++static struct block *swap_block;
++static struct bitmap *swap_bitmap;
++static struct lock swap_lock;
++
++void swap_init(void){
++  swap_block = block_get_role(BLOCK_SWAP);
++  size_t swap_size = block_size(swap_block) / PAGE_SECTORS;
++  swap_bitmap = bitmap_create(swap_size);
++  bitmap_set_all(swap_bitmap, false);
++  lock_init(&swap_lock);
++}
++
++bool swap_out(struct page_entry *p){
++  ASSERT(p != NULL);
++  ASSERT(p->frame != NULL);
++  //ASSERT(lock_held_by_current_thread(&p->frame->lock));
++
++  lock_acquire(&swap_lock);
++  size_t slot = bitmap_scan_and_flip(swap_bitmap, 0, 1, false);
++  lock_release(&swap_lock);
++
++  if(slot == BITMAP_ERROR){
++    return false;
++  }
++
++  size_t start_sector = slot * PAGE_SECTORS;
++  for(size_t i = 0; i < PAGE_SECTORS; i++){
++    block_write(swap_block, start_sector + i, (uint8_t *)p->frame->base + i * BLOCK_SECTOR_SIZE);
++  }
++
++  p->in_swap = true;
++  p->swap_index = slot;
++
++  return true;
++}
++
++void swap_in(struct page_entry *p){
++  size_t i;
++
++  ASSERT(p->frame != NULL);
++  //ASSERT(lock_held_by_current_thread (&p->frame->lock));
++  ASSERT(p->in_swap);
++  ASSERT(p->swap_index != (size_t) - 1);
++
++  size_t start_sector = p->swap_index * PAGE_SECTORS;
++  for(size_t i = 0; i < PAGE_SECTORS; i++){
++    block_read(swap_block, start_sector + i, (uint8_t *)p->frame->base + i * BLOCK_SECTOR_SIZE);
++  }
++
++  lock_acquire(&swap_lock);
++  bitmap_reset(swap_bitmap, p->swap_index);
++  lock_release(&swap_lock);
++
++  p->in_swap = false;
++  p->swap_index = (size_t)-1;
++}
++
++void swap_free(size_t swap_index){
++  lock_acquire(&swap_lock);
++  bitmap_reset(swap_bitmap, swap_index);
++  lock_release(&swap_lock);
++}
+diff -ruN aos_pintos/src/vm/swap.h pintos-solution/src/vm/swap.h
+--- aos_pintos/src/vm/swap.h	2025-04-13 01:37:14.953614163 +0000
++++ pintos-solution/src/vm/swap.h	2025-04-13 01:30:52.874156137 +0000
+@@ -0,0 +1,8 @@
++#include <stdbool.h>
++#include "threads/synch.h"
++#include "vm/page.h"
++
++void swap_init(void);
++bool swap_out(struct page_entry *p);
++void swap_in(struct page_entry *p);
++void swap_free(size_t swap_index);
