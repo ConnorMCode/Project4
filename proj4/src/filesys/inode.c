@@ -75,7 +75,7 @@ static block_sector_t byte_to_sector (const struct inode *inode, off_t pos)
   if(index < PTRS_PER_BLOCK * PTRS_PER_BLOCK){
     block_sector_t double_indirect_block[PTRS_PER_BLOCK];
 
-    block_read(fs_device, indoe->data.double_indirect, double_indirect_block);
+    block_read(fs_device, inode->data.double_indirect, double_indirect_block);
 
     block_sector_t indirect_sector = double_indirect_block[index / PTRS_PER_BLOCK];
     if(indirect_sector == 0){
@@ -293,19 +293,21 @@ off_t inode_write_at (struct inode *inode, const void *buffer_, off_t size,
   if (inode->deny_write_cnt)
     return 0;
 
+  off_t end_offset = offset + size;
+  if (end_offset > inode_length(inode)){
+    if (!inode_resize(inode, end_offset)){
+      return bytes_written;
+    }
+  }
+  
   while (size > 0)
     {
-      /* Sector to write, starting byte offset within sector. */
       block_sector_t sector_idx = byte_to_sector (inode, offset);
       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
 
-      /* Bytes left in inode, bytes left in sector, lesser of the two. */
-      off_t inode_left = inode_length (inode) - offset;
       int sector_left = BLOCK_SECTOR_SIZE - sector_ofs;
-      int min_left = inode_left < sector_left ? inode_left : sector_left;
+      int chunk_size = size < sector_left ? size : sector_left;
 
-      /* Number of bytes to actually write into this sector. */
-      int chunk_size = size < min_left ? size : min_left;
       if (chunk_size <= 0)
         break;
 
@@ -375,4 +377,65 @@ void inode_set_symlink (struct inode *inode, bool is_symlink)
 {
   inode->data.is_symlink = is_symlink;
   block_write (fs_device, inode->sector, &inode->data);
+}
+
+bool inode_resize(struct inode *inode, off_t new_length){
+  if (new_length < inode->data.length){
+    //implement shrinking
+    return false;
+  }
+
+  off_t old_length = inode->data.length;
+  size_t old_sectors = bytes_to_sectors(old_length);
+  size_t new_sectors = bytes_to_sectors(new_length);
+
+  if (new_sectors > old_sectors){
+    for (size_t i = old_sectors; i < new_sectors; i++){
+      block_sector_t new_sector;
+      if(!free_map_allocate(1, &new_sector)){
+	return false;
+      }
+
+      static char zeros[BLOCK_SECTOR_SIZE];
+      block_write(fs_device, new_sector, zeros);
+
+      if (!inode_allocate_sector(&inode->data, i, new_sector)){
+	return false;
+      }
+    }
+  }
+
+  inode->data.length = new_length;
+
+  inode_update_disk(inode);
+
+  return true;
+}
+
+bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_sector_t new_sector){
+  if (index < DIRECT_BLOCKS){
+    disk_inode->direct[index] = new_sector;
+    return true;
+  }
+
+  index -= DIRECT_BLOCKS;
+
+  if (index < INDIRECT_BLOCK_COUNT){
+    if (disk_inode->indirect == 0){
+      if (!free_map_allocate(1, &disk_inode->indirect)){
+	return false;
+      }
+      static char zeros[BLOCK_SECTOR_SIZE];
+      block_write(fs_device, disk_inode->indirect, zeros);
+    }
+
+    block_sector_t indirect_block[INDIRECT_BLOCK_COUNT];
+    block_read(fs_device, disk_inode->indirect, indirect_block);
+    indirect_block[index] = new_sector;
+    block_write(fs_device, disk_inode->indirect, indirect_block);
+    return true;
+  }
+
+  //later add doubly indirect
+  return false;
 }
