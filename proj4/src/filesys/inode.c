@@ -207,8 +207,7 @@ void inode_close (struct inode *inode)
       if (inode->removed)
         {
           free_map_release (inode->sector, 1);
-          free_map_release (inode->data.start,
-                            bytes_to_sectors (inode->data.length));
+          inode_deallocate_sectors(&inode->data);
         }
 
       free (inode);
@@ -407,12 +406,15 @@ bool inode_resize(struct inode *inode, off_t new_length){
 
   inode->data.length = new_length;
 
-  inode_update_disk(inode);
+  block_write(fs_device, inode->sector, &inode->data);
 
   return true;
 }
 
 bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_sector_t new_sector){
+
+  static char zeros[BLOCK_SECTOR_SIZE];
+  
   if (index < DIRECT_BLOCKS){
     disk_inode->direct[index] = new_sector;
     return true;
@@ -420,22 +422,103 @@ bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_se
 
   index -= DIRECT_BLOCKS;
 
-  if (index < INDIRECT_BLOCK_COUNT){
+  if (index < PTRS_PER_BLOCK){
     if (disk_inode->indirect == 0){
       if (!free_map_allocate(1, &disk_inode->indirect)){
 	return false;
       }
-      static char zeros[BLOCK_SECTOR_SIZE];
       block_write(fs_device, disk_inode->indirect, zeros);
     }
 
-    block_sector_t indirect_block[INDIRECT_BLOCK_COUNT];
+    block_sector_t indirect_block[PTRS_PER_BLOCK];
     block_read(fs_device, disk_inode->indirect, indirect_block);
     indirect_block[index] = new_sector;
     block_write(fs_device, disk_inode->indirect, indirect_block);
     return true;
   }
 
-  //later add doubly indirect
-  return false;
+  index -= PTRS_PER_BLOCK;
+  if (index < PTRS_PER_BLOCK * PTRS_PER_BLOCK) {
+    if (disk_inode->double_indirect == 0) {
+      if (!free_map_allocate(1, &disk_inode->double_indirect)) return false;
+      block_write(fs_device, disk_inode->double_indirect, zeros);
+    }
+
+    block_sector_t outer_block[PTRS_PER_BLOCK];
+    block_read(fs_device, disk_inode->double_indirect, outer_block);
+
+    size_t outer_index = index / PTRS_PER_BLOCK;
+    size_t inner_index = index % PTRS_PER_BLOCK;
+
+    if (outer_block[outer_index] == 0) {
+      if (!free_map_allocate(1, &outer_block[outer_index])) return false;
+      block_write(fs_device, outer_block[outer_index], zeros);
+      block_write(fs_device, disk_inode->double_indirect, outer_block); // update outer block
+    }
+
+    block_sector_t inner_block[PTRS_PER_BLOCK];
+    block_read(fs_device, outer_block[outer_index], inner_block);
+    inner_block[inner_index] = new_sector;
+    block_write(fs_device, outer_block[outer_index], inner_block);
+    return true;
+  }
+
+  return false; // index too large
+}
+
+void inode_deallocate_sectors(struct inode_disk *disk_inode) {
+  static char zeros[BLOCK_SECTOR_SIZE];
+  size_t num_sectors = bytes_to_sectors(disk_inode->length);
+
+  // 1. Direct blocks
+  size_t i = 0;
+  for (; i < DIRECT_BLOCKS && i < num_sectors; i++) {
+    if (disk_inode->direct[i] != 0)
+      free_map_release(disk_inode->direct[i], 1);
+  }
+
+  // 2. Indirect block
+  if (i < num_sectors && disk_inode->indirect != 0) {
+    block_sector_t indirect_block[PTRS_PER_BLOCK];
+    block_read(fs_device, disk_inode->indirect, indirect_block);
+
+    size_t indirect_count = num_sectors - i;
+    if (indirect_count > PTRS_PER_BLOCK) indirect_count = PTRS_PER_BLOCK;
+
+    for (size_t j = 0; j < indirect_count; j++) {
+      if (indirect_block[j] != 0)
+	free_map_release(indirect_block[j], 1);
+    }
+
+    free_map_release(disk_inode->indirect, 1);
+    i += indirect_count;
+  }
+
+  // 3. Double indirect block
+  if (i < num_sectors && disk_inode->double_indirect != 0) {
+    block_sector_t outer_block[PTRS_PER_BLOCK];
+    block_read(fs_device, disk_inode->double_indirect, outer_block);
+
+    size_t total_double = num_sectors - i;
+    size_t outer_limit = DIV_ROUND_UP(total_double, PTRS_PER_BLOCK);
+
+    for (size_t outer = 0; outer < outer_limit; outer++) {
+      if (outer_block[outer] != 0) {
+	block_sector_t inner_block[PTRS_PER_BLOCK];
+	block_read(fs_device, outer_block[outer], inner_block);
+
+	size_t inner_limit = total_double > PTRS_PER_BLOCK ? PTRS_PER_BLOCK : total_double;
+
+	for (size_t inner = 0; inner < inner_limit; inner++) {
+	  if (inner_block[inner] != 0)
+	    free_map_release(inner_block[inner], 1);
+	}
+
+	free_map_release(outer_block[outer], 1);
+	total_double -= inner_limit;
+      }
+    }
+
+    free_map_release(disk_inode->double_indirect, 1);
+  }
 }
