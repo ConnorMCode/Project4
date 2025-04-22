@@ -6,6 +6,7 @@
 #include "devices/block.h"
 
 struct bitmap;
+struct inode_disk;
 
 void inode_init (void);
 bool inode_create (block_sector_t, off_t);
@@ -23,5 +24,7 @@ bool inode_get_symlink (struct inode *inode);
 void inode_set_symlink (struct inode *inode, bool is_symlink);
 
 bool inode_resize(struct inode *inode, off_t new_length);
+void inode_deallocate_sectors(struct inode_disk *disk_inode);
+bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_sector_t new_sector);
 
 #endif /* filesys/inode.h */
