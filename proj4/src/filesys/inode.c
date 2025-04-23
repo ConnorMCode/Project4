@@ -103,7 +103,7 @@ void inode_init (void) { list_init (&open_inodes); }
    device.
    Returns true if successful.
    Returns false if memory or disk allocation fails. */
-bool inode_create (block_sector_t sector, off_t length)
+bool inode_create (block_sector_t sector, off_t length, bool is_dir)
 {
   ASSERT (length >= 0);
 
@@ -116,6 +116,7 @@ bool inode_create (block_sector_t sector, off_t length)
   disk_inode->length = 0; // Start at 0, will grow via inode_resize
   disk_inode->magic = INODE_MAGIC;
   disk_inode->is_symlink = false;
+  disk_inode->is_dir = is_dir;
 
   struct inode tmp_inode;
   memset(&tmp_inode, 0, sizeof tmp_inode);
@@ -519,4 +520,8 @@ void inode_deallocate_sectors(struct inode_disk *disk_inode) {
 
     free_map_release(disk_inode->double_indirect, 1);
   }
+}
+
+bool inode_is_dir(struct inode *inode){
+  return inode != NULL && inode->data.is_dir;
 }

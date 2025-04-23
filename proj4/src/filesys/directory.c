@@ -23,17 +23,54 @@ struct dir_entry
 
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
-bool dir_create (block_sector_t sector, size_t entry_cnt)
-{
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector) {
+  // Create inode for directory, mark it as a directory type
+  if (!inode_create (sector, entry_cnt * sizeof (struct dir_entry), true)) {
+    return false;
+  }
+
+  struct dir *dir = dir_open(inode_open(sector));
+  if (dir == NULL)
+    return false;
+
+  // Add '.' pointing to self
+  struct dir_entry dot_entry;
+  memset(&dot_entry, 0, sizeof dot_entry);
+  dot_entry.in_use = true;
+  strlcpy(dot_entry.name, ".", NAME_MAX + 1);
+  dot_entry.inode_sector = sector;
+
+  if (inode_write_at(dir->inode, &dot_entry, sizeof dot_entry, 0) != sizeof dot_entry) {
+    dir_close(dir);
+    return false;
+  }
+
+  // Add '..' pointing to parent
+  struct dir_entry dotdot_entry;
+  memset(&dotdot_entry, 0, sizeof dotdot_entry);
+  dotdot_entry.in_use = true;
+  strlcpy(dotdot_entry.name, "..", NAME_MAX + 1);
+  dotdot_entry.inode_sector = parent_sector;
+
+  if (inode_write_at(dir->inode, &dotdot_entry, sizeof dotdot_entry, sizeof dot_entry) != sizeof dotdot_entry) {
+    dir_close(dir);
+    return false;
+  }
+
+  dir_close(dir);
+  return true;
 }
 
 /* Opens and returns the directory for the given INODE, of which
    it takes ownership.  Returns a null pointer on failure. */
 struct dir *dir_open (struct inode *inode)
 {
+  if (inode == NULL || !inode_is_dir(inode)){
+    inode_close(inode);
+    return NULL;
+  }
   struct dir *dir = calloc (1, sizeof *dir);
-  if (inode != NULL && dir != NULL)
+  if (dir != NULL)
     {
       dir->inode = inode;
       dir->pos = 0;
@@ -132,36 +169,40 @@ bool dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   off_t ofs;
   bool success = false;
 
-  ASSERT (dir != NULL);
-  ASSERT (name != NULL);
+  ASSERT(dir != NULL);
+  ASSERT(name != NULL);
 
   /* Check NAME for validity. */
-  if (*name == '\0' || strlen (name) > NAME_MAX)
+  if (*name == '\0' || strlen(name) > NAME_MAX)
     return false;
 
   /* Check that NAME is not in use. */
-  if (lookup (dir, name, NULL, NULL))
+  if (lookup(dir, name, NULL, NULL))
     goto done;
 
-  /* Set OFS to offset of free slot.
-     If there are no free slots, then it will be set to the
-     current end-of-file.
-
-     inode_read_at() will only return a short read at end of file.
-     Otherwise, we'd need to verify that we didn't get a short
-     read due to something intermittent such as low memory. */
-  for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
+  /* Set OFS to offset of free slot. */
+  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
        ofs += sizeof e)
     if (!e.in_use)
       break;
 
-  /* Write slot. */
+  /* Write directory entry. */
   e.in_use = true;
-  strlcpy (e.name, name, sizeof e.name);
+  strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
-  success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
+  success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
 
-done:
+  /* If it's a directory, set up "." and ".." entries */
+  if (success && inode_is_dir(inode_open(inode_sector))) {
+    struct dir *subdir = dir_open(inode_open(inode_sector));
+    if (subdir != NULL) {
+      dir_add(subdir, ".", inode_sector);                          // self
+      dir_add(subdir, "..", inode_get_inumber(dir->inode));       // parent
+      dir_close(subdir);
+    }
+  }
+
+ done:
   return success;
 }
 
