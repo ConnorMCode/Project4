@@ -7,6 +7,14 @@
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
 
+#define INODE_DEBUG
+
+#ifdef INODE_DEBUG
+#define dprintf(...) printf(__VA_ARGS__)
+#else
+#define dprintf(...) ((void)0)
+#endif
+
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
@@ -26,7 +34,14 @@ struct inode_disk
   off_t length;         /* File size in bytes. */
   unsigned magic;       /* Magic number. */
   bool is_symlink;      /* True if symbolic link, false otherwise. */
-};
+  bool is_dir;
+  uint8_t unused[BLOCK_SECTOR_SIZE
+		 - (DIRECT_BLOCKS * sizeof(block_sector_t))
+		 - 2 * sizeof(block_sector_t)
+		 - sizeof(off_t)
+		 - sizeof(unsigned)
+		 - 2 * sizeof(bool)];
+}__attribute__((packed));
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -247,6 +262,9 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
+      dprintf("[inode_read_at] Reading sector %d at offset %d, chunk size %d\n",
+	      sector_idx, sector_ofs, chunk_size);
+      
       if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
         {
           /* Read full sector directly into caller's buffer. */
@@ -272,6 +290,8 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
       bytes_read += chunk_size;
     }
   free (bounce);
+
+  dprintf("[inode_read_at] Read %d bytes\n", (int)bytes_read);
 
   return bytes_read;
 }

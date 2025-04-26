@@ -5,6 +5,14 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 
+#define FREE_MAP_DEBUG
+
+#ifdef FREE_MAP_DEBUG
+#define dprintf(...) printf(__VA_ARGS__)
+#else
+#define dprintf(...) ((void)0)
+#endif
+
 static struct file *free_map_file; /* Free map file. */
 static struct bitmap *free_map;    /* Free map, one bit per sector. */
 
@@ -48,11 +56,19 @@ void free_map_release (block_sector_t sector, size_t cnt)
 /* Opens the free map file and reads it from disk. */
 void free_map_open (void)
 {
+
+  dprintf("[free_map_open] Opening free map at sector %d\n", FREE_MAP_SECTOR);
+  
   free_map_file = file_open (inode_open (FREE_MAP_SECTOR));
   if (free_map_file == NULL)
     PANIC ("can't open free map");
+
+  dprintf("[free_map_open] Successfully opened free map file. Now reading bitmap...\n");
+  
   if (!bitmap_read (free_map, free_map_file))
     PANIC ("can't read free map");
+
+  dprintf("[free_map_open] Successfully read free map bitmap from disk.\n");
 }
 
 /* Writes the free map to disk and closes the free map file. */
@@ -63,7 +79,7 @@ void free_map_close (void) { file_close (free_map_file); }
 void free_map_create (void)
 {
   /* Create inode. */
-  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map)))
+  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map), false))
     PANIC ("free map creation failed");
 
   /* Write bitmap to file. */
