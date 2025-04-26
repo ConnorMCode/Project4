@@ -79,6 +79,9 @@ void free_map_close (void) { file_close (free_map_file); }
 void free_map_create (void)
 {
   /* Create inode. */
+
+  dprintf("[free_map_create] bitmap_file_size = %d\n", bitmap_file_size(free_map));
+  
   if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map), false))
     PANIC ("free map creation failed");
 

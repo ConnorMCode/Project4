@@ -123,11 +123,15 @@ bool inode_create (block_sector_t sector, off_t length, bool is_dir)
   ASSERT (length >= 0);
 
   struct inode_disk *disk_inode = calloc (1, sizeof *disk_inode);
-  if (disk_inode == NULL)
+  if (disk_inode == NULL){
+    dprintf("[inode_create] Failed to allocate disk_inode\n");
     return false;
+  }
 
   ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
 
+  dprintf("[inode_create] Creating inode at sector %d with length %d, is_dir=%d\n", (int)sector, (int)length, is_dir);
+  
   disk_inode->length = 0; // Start at 0, will grow via inode_resize
   disk_inode->magic = INODE_MAGIC;
   disk_inode->is_symlink = false;
@@ -137,19 +141,26 @@ bool inode_create (block_sector_t sector, off_t length, bool is_dir)
   memset(&tmp_inode, 0, sizeof tmp_inode);
   tmp_inode.data = *disk_inode;
 
+  dprintf("[inode_create] Before inode_resize: tmp_inode length=%d\n", (int)tmp_inode.data.length);
+  
   // Use inode_resize to allocate and initialize sectors
   if (!inode_resize(&tmp_inode, length)) {
+    dprintf("[inode_create] inode_resize failed\n");
     free(disk_inode);
     return false;
   }
+
+  dprintf("[inode_create] After inode_resize: tmp_inode length=%d\n", (int)tmp_inode.data.length);
 
   // Copy updated inode_disk structure back
   *disk_inode = tmp_inode.data;
 
   // Write inode to disk
+  dprintf("[inode_create] Writing inode to sector %d\n", (int)sector);
   block_write(fs_device, sector, disk_inode);
 
   free(disk_inode);
+  dprintf("[inode_create] Inode creation complete\n");
   return true;
 }
 
@@ -246,6 +257,9 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
   off_t bytes_read = 0;
   uint8_t *bounce = NULL;
 
+  dprintf("[inode_read_at] Starting read: inode sector=%d, inode length=%d, requested size=%d, start offset=%d\n",
+	  (int)inode->sector, (int)inode_length(inode), (int)size, (int)offset);
+
   while (size > 0)
     {
       /* Disk sector to read, starting byte offset within sector. */
@@ -259,8 +273,11 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
 
       /* Number of bytes to actually copy out of this sector. */
       int chunk_size = size < min_left ? size : min_left;
-      if (chunk_size <= 0)
+      if (chunk_size <= 0){
+	dprintf("[inode_read_at] Breaking: chunk_size <= 0 (inode_left=%d, sector_left=%d, size=%d)\n",
+		(int)inode_left, (int)sector_left, (int)size);
         break;
+      }
 
       dprintf("[inode_read_at] Reading sector %d at offset %d, chunk size %d\n",
 	      sector_idx, sector_ofs, chunk_size);
@@ -268,6 +285,7 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
       if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
         {
           /* Read full sector directly into caller's buffer. */
+	  dprintf("[inode_read_at] Full sector read into buffer\n");
           block_read (fs_device, sector_idx, buffer + bytes_read);
         }
       else
@@ -277,9 +295,12 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
           if (bounce == NULL)
             {
               bounce = malloc (BLOCK_SECTOR_SIZE);
-              if (bounce == NULL)
+              if (bounce == NULL){
+		dprintf("[inode_read_at] Bounce buffer malloc failed!\n");
                 break;
+	      }
             }
+	  dprintf("[inode_read_at] Partial sector read using bounce buffer\n");
           block_read (fs_device, sector_idx, bounce);
           memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
         }
