@@ -155,6 +155,8 @@ bool inode_create (block_sector_t sector, off_t length, bool is_dir)
   // Copy updated inode_disk structure back
   *disk_inode = tmp_inode.data;
 
+  dprintf("[inode_create] After resize copy in disk_inode length=%d\n", disk_inode->length);
+
   // Write inode to disk
   dprintf("[inode_create] Writing inode to sector %d\n", (int)sector);
   block_write(fs_device, sector, disk_inode);
@@ -180,6 +182,7 @@ struct inode *inode_open (block_sector_t sector)
       if (inode->sector == sector)
         {
           inode_reopen (inode);
+	  dprintf("[inode_open] At sector %d found length %d\n", (int)inode->sector, (int)inode->data.length);
           return inode;
         }
     }
@@ -196,6 +199,7 @@ struct inode *inode_open (block_sector_t sector)
   inode->deny_write_cnt = 0;
   inode->removed = false;
   block_read (fs_device, inode->sector, &inode->data);
+  dprintf("[inode_open] At sector %d found length %d\n", (int)inode->sector, (int)inode->data.length);
   return inode;
 }
 
