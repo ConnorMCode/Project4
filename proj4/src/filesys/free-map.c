@@ -5,7 +5,7 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 
-#define FREE_MAP_DEBUG
+// #define FREE_MAP_DEBUG
 
 #ifdef FREE_MAP_DEBUG
 #define dprintf(...) printf(__VA_ARGS__)

@@ -7,7 +7,7 @@
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
 
-#define INODE_DEBUG
+// #define INODE_DEBUG
 
 #ifdef INODE_DEBUG
 #define dprintf(...) printf(__VA_ARGS__)
