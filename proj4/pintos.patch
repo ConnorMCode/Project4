@@ -1,759 +1,6 @@
-diff -ruN aos_pintos/.git/HEAD pintos-solution/.git/HEAD
---- aos_pintos/.git/HEAD	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/HEAD	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+ref: refs/heads/master
-diff -ruN aos_pintos/.git/config pintos-solution/.git/config
---- aos_pintos/.git/config	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/config	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1,11 @@
-+[core]
-+	repositoryformatversion = 0
-+	filemode = true
-+	bare = false
-+	logallrefupdates = true
-+[remote "origin"]
-+	url = https://github.com/ConnorMCode/Project3.git
-+	fetch = +refs/heads/*:refs/remotes/origin/*
-+[branch "master"]
-+	remote = origin
-+	merge = refs/heads/master
-diff -ruN aos_pintos/.git/description pintos-solution/.git/description
---- aos_pintos/.git/description	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/description	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1 @@
-+Unnamed repository; edit this file 'description' to name the repository.
-diff -ruN aos_pintos/.git/hooks/applypatch-msg.sample pintos-solution/.git/hooks/applypatch-msg.sample
---- aos_pintos/.git/hooks/applypatch-msg.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/applypatch-msg.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,15 @@
-+#!/bin/sh
-+#
-+# An example hook script to check the commit log message taken by
-+# applypatch from an e-mail message.
-+#
-+# The hook should exit with non-zero status after issuing an
-+# appropriate message if it wants to stop the commit.  The hook is
-+# allowed to edit the commit message file.
-+#
-+# To enable this hook, rename this file to "applypatch-msg".
-+
-+. git-sh-setup
-+commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
-+test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
-+:
-diff -ruN aos_pintos/.git/hooks/commit-msg.sample pintos-solution/.git/hooks/commit-msg.sample
---- aos_pintos/.git/hooks/commit-msg.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/commit-msg.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,24 @@
-+#!/bin/sh
-+#
-+# An example hook script to check the commit log message.
-+# Called by "git commit" with one argument, the name of the file
-+# that has the commit message.  The hook should exit with non-zero
-+# status after issuing an appropriate message if it wants to stop the
-+# commit.  The hook is allowed to edit the commit message file.
-+#
-+# To enable this hook, rename this file to "commit-msg".
-+
-+# Uncomment the below to add a Signed-off-by line to the message.
-+# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
-+# hook is more suited to it.
-+#
-+# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-+# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
-+
-+# This example catches duplicate Signed-off-by lines.
-+
-+test "" = "$(grep '^Signed-off-by: ' "$1" |
-+	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
-+	echo >&2 Duplicate Signed-off-by lines.
-+	exit 1
-+}
-diff -ruN aos_pintos/.git/hooks/fsmonitor-watchman.sample pintos-solution/.git/hooks/fsmonitor-watchman.sample
---- aos_pintos/.git/hooks/fsmonitor-watchman.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/fsmonitor-watchman.sample	2025-04-13 01:30:52.450151710 +0000
-@@ -0,0 +1,114 @@
-+#!/usr/bin/perl
-+
-+use strict;
-+use warnings;
-+use IPC::Open2;
-+
-+# An example hook script to integrate Watchman
-+# (https://facebook.github.io/watchman/) with git to speed up detecting
-+# new and modified files.
-+#
-+# The hook is passed a version (currently 1) and a time in nanoseconds
-+# formatted as a string and outputs to stdout all files that have been
-+# modified since the given time. Paths must be relative to the root of
-+# the working tree and separated by a single NUL.
-+#
-+# To enable this hook, rename this file to "query-watchman" and set
-+# 'git config core.fsmonitor .git/hooks/query-watchman'
-+#
-+my ($version, $time) = @ARGV;
-+
-+# Check the hook interface version
-+
-+if ($version == 1) {
-+	# convert nanoseconds to seconds
-+	$time = int $time / 1000000000;
-+} else {
-+	die "Unsupported query-fsmonitor hook version '$version'.\n" .
-+	    "Falling back to scanning...\n";
-+}
-+
-+my $git_work_tree;
-+if ($^O =~ 'msys' || $^O =~ 'cygwin') {
-+	$git_work_tree = Win32::GetCwd();
-+	$git_work_tree =~ tr/\\/\//;
-+} else {
-+	require Cwd;
-+	$git_work_tree = Cwd::cwd();
-+}
-+
-+my $retry = 1;
-+
-+launch_watchman();
-+
-+sub launch_watchman {
-+
-+	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
-+	    or die "open2() failed: $!\n" .
-+	    "Falling back to scanning...\n";
-+
-+	# In the query expression below we're asking for names of files that
-+	# changed since $time but were not transient (ie created after
-+	# $time but no longer exist).
-+	#
-+	# To accomplish this, we're using the "since" generator to use the
-+	# recency index to select candidate nodes and "fields" to limit the
-+	# output to file names only. Then we're using the "expression" term to
-+	# further constrain the results.
-+	#
-+	# The category of transient files that we want to ignore will have a
-+	# creation clock (cclock) newer than $time_t value and will also not
-+	# currently exist.
-+
-+	my $query = <<"	END";
-+		["query", "$git_work_tree", {
-+			"since": $time,
-+			"fields": ["name"],
-+			"expression": ["not", ["allof", ["since", $time, "cclock"], ["not", "exists"]]]
-+		}]
-+	END
-+
-+	print CHLD_IN $query;
-+	close CHLD_IN;
-+	my $response = do {local $/; <CHLD_OUT>};
-+
-+	die "Watchman: command returned no output.\n" .
-+	    "Falling back to scanning...\n" if $response eq "";
-+	die "Watchman: command returned invalid output: $response\n" .
-+	    "Falling back to scanning...\n" unless $response =~ /^\{/;
-+
-+	my $json_pkg;
-+	eval {
-+		require JSON::XS;
-+		$json_pkg = "JSON::XS";
-+		1;
-+	} or do {
-+		require JSON::PP;
-+		$json_pkg = "JSON::PP";
-+	};
-+
-+	my $o = $json_pkg->new->utf8->decode($response);
-+
-+	if ($retry > 0 and $o->{error} and $o->{error} =~ m/unable to resolve root .* directory (.*) is not watched/) {
-+		print STDERR "Adding '$git_work_tree' to watchman's watch list.\n";
-+		$retry--;
-+		qx/watchman watch "$git_work_tree"/;
-+		die "Failed to make watchman watch '$git_work_tree'.\n" .
-+		    "Falling back to scanning...\n" if $? != 0;
-+
-+		# Watchman will always return all files on the first query so
-+		# return the fast "everything is dirty" flag to git and do the
-+		# Watchman query just to get it over with now so we won't pay
-+		# the cost in git to look up each individual file.
-+		print "/\0";
-+		eval { launch_watchman() };
-+		exit 0;
-+	}
-+
-+	die "Watchman: $o->{error}.\n" .
-+	    "Falling back to scanning...\n" if $o->{error};
-+
-+	binmode STDOUT, ":utf8";
-+	local $, = "\0";
-+	print @{$o->{files}};
-+}
-diff -ruN aos_pintos/.git/hooks/post-update.sample pintos-solution/.git/hooks/post-update.sample
---- aos_pintos/.git/hooks/post-update.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/post-update.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,8 @@
-+#!/bin/sh
-+#
-+# An example hook script to prepare a packed repository for use over
-+# dumb transports.
-+#
-+# To enable this hook, rename this file to "post-update".
-+
-+exec git update-server-info
-diff -ruN aos_pintos/.git/hooks/pre-applypatch.sample pintos-solution/.git/hooks/pre-applypatch.sample
---- aos_pintos/.git/hooks/pre-applypatch.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/pre-applypatch.sample	2025-04-13 01:30:52.450151710 +0000
-@@ -0,0 +1,14 @@
-+#!/bin/sh
-+#
-+# An example hook script to verify what is about to be committed
-+# by applypatch from an e-mail message.
-+#
-+# The hook should exit with non-zero status after issuing an
-+# appropriate message if it wants to stop the commit.
-+#
-+# To enable this hook, rename this file to "pre-applypatch".
-+
-+. git-sh-setup
-+precommit="$(git rev-parse --git-path hooks/pre-commit)"
-+test -x "$precommit" && exec "$precommit" ${1+"$@"}
-+:
-diff -ruN aos_pintos/.git/hooks/pre-commit.sample pintos-solution/.git/hooks/pre-commit.sample
---- aos_pintos/.git/hooks/pre-commit.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/pre-commit.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,49 @@
-+#!/bin/sh
-+#
-+# An example hook script to verify what is about to be committed.
-+# Called by "git commit" with no arguments.  The hook should
-+# exit with non-zero status after issuing an appropriate message if
-+# it wants to stop the commit.
-+#
-+# To enable this hook, rename this file to "pre-commit".
-+
-+if git rev-parse --verify HEAD >/dev/null 2>&1
-+then
-+	against=HEAD
-+else
-+	# Initial commit: diff against an empty tree object
-+	against=4b825dc642cb6eb9a060e54bf8d69288fbee4904
-+fi
-+
-+# If you want to allow non-ASCII filenames set this variable to true.
-+allownonascii=$(git config --bool hooks.allownonascii)
-+
-+# Redirect output to stderr.
-+exec 1>&2
-+
-+# Cross platform projects tend to avoid non-ASCII filenames; prevent
-+# them from being added to the repository. We exploit the fact that the
-+# printable range starts at the space character and ends with tilde.
-+if [ "$allownonascii" != "true" ] &&
-+	# Note that the use of brackets around a tr range is ok here, (it's
-+	# even required, for portability to Solaris 10's /usr/bin/tr), since
-+	# the square bracket bytes happen to fall in the designated range.
-+	test $(git diff --cached --name-only --diff-filter=A -z $against |
-+	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
-+then
-+	cat <<\EOF
-+Error: Attempt to add a non-ASCII file name.
-+
-+This can cause problems if you want to work with people on other platforms.
-+
-+To be portable it is advisable to rename the file.
-+
-+If you know what you are doing you can disable this check using:
-+
-+  git config hooks.allownonascii true
-+EOF
-+	exit 1
-+fi
-+
-+# If there are whitespace errors, print the offending file names and fail.
-+exec git diff-index --check --cached $against --
-diff -ruN aos_pintos/.git/hooks/pre-push.sample pintos-solution/.git/hooks/pre-push.sample
---- aos_pintos/.git/hooks/pre-push.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/pre-push.sample	2025-04-13 01:30:52.450151710 +0000
-@@ -0,0 +1,53 @@
-+#!/bin/sh
-+
-+# An example hook script to verify what is about to be pushed.  Called by "git
-+# push" after it has checked the remote status, but before anything has been
-+# pushed.  If this script exits with a non-zero status nothing will be pushed.
-+#
-+# This hook is called with the following parameters:
-+#
-+# $1 -- Name of the remote to which the push is being done
-+# $2 -- URL to which the push is being done
-+#
-+# If pushing without using a named remote those arguments will be equal.
-+#
-+# Information about the commits which are being pushed is supplied as lines to
-+# the standard input in the form:
-+#
-+#   <local ref> <local sha1> <remote ref> <remote sha1>
-+#
-+# This sample shows how to prevent push of commits where the log message starts
-+# with "WIP" (work in progress).
-+
-+remote="$1"
-+url="$2"
-+
-+z40=0000000000000000000000000000000000000000
-+
-+while read local_ref local_sha remote_ref remote_sha
-+do
-+	if [ "$local_sha" = $z40 ]
-+	then
-+		# Handle delete
-+		:
-+	else
-+		if [ "$remote_sha" = $z40 ]
-+		then
-+			# New branch, examine all commits
-+			range="$local_sha"
-+		else
-+			# Update to existing branch, examine new commits
-+			range="$remote_sha..$local_sha"
-+		fi
-+
-+		# Check for WIP commit
-+		commit=`git rev-list -n 1 --grep '^WIP' "$range"`
-+		if [ -n "$commit" ]
-+		then
-+			echo >&2 "Found WIP commit in $local_ref, not pushing"
-+			exit 1
-+		fi
-+	fi
-+done
-+
-+exit 0
-diff -ruN aos_pintos/.git/hooks/pre-rebase.sample pintos-solution/.git/hooks/pre-rebase.sample
---- aos_pintos/.git/hooks/pre-rebase.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/pre-rebase.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,169 @@
-+#!/bin/sh
-+#
-+# Copyright (c) 2006, 2008 Junio C Hamano
-+#
-+# The "pre-rebase" hook is run just before "git rebase" starts doing
-+# its job, and can prevent the command from running by exiting with
-+# non-zero status.
-+#
-+# The hook is called with the following parameters:
-+#
-+# $1 -- the upstream the series was forked from.
-+# $2 -- the branch being rebased (or empty when rebasing the current branch).
-+#
-+# This sample shows how to prevent topic branches that are already
-+# merged to 'next' branch from getting rebased, because allowing it
-+# would result in rebasing already published history.
-+
-+publish=next
-+basebranch="$1"
-+if test "$#" = 2
-+then
-+	topic="refs/heads/$2"
-+else
-+	topic=`git symbolic-ref HEAD` ||
-+	exit 0 ;# we do not interrupt rebasing detached HEAD
-+fi
-+
-+case "$topic" in
-+refs/heads/??/*)
-+	;;
-+*)
-+	exit 0 ;# we do not interrupt others.
-+	;;
-+esac
-+
-+# Now we are dealing with a topic branch being rebased
-+# on top of master.  Is it OK to rebase it?
-+
-+# Does the topic really exist?
-+git show-ref -q "$topic" || {
-+	echo >&2 "No such branch $topic"
-+	exit 1
-+}
-+
-+# Is topic fully merged to master?
-+not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
-+if test -z "$not_in_master"
-+then
-+	echo >&2 "$topic is fully merged to master; better remove it."
-+	exit 1 ;# we could allow it, but there is no point.
-+fi
-+
-+# Is topic ever merged to next?  If so you should not be rebasing it.
-+only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
-+only_next_2=`git rev-list ^master           ${publish} | sort`
-+if test "$only_next_1" = "$only_next_2"
-+then
-+	not_in_topic=`git rev-list "^$topic" master`
-+	if test -z "$not_in_topic"
-+	then
-+		echo >&2 "$topic is already up to date with master"
-+		exit 1 ;# we could allow it, but there is no point.
-+	else
-+		exit 0
-+	fi
-+else
-+	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
-+	/usr/bin/perl -e '
-+		my $topic = $ARGV[0];
-+		my $msg = "* $topic has commits already merged to public branch:\n";
-+		my (%not_in_next) = map {
-+			/^([0-9a-f]+) /;
-+			($1 => 1);
-+		} split(/\n/, $ARGV[1]);
-+		for my $elem (map {
-+				/^([0-9a-f]+) (.*)$/;
-+				[$1 => $2];
-+			} split(/\n/, $ARGV[2])) {
-+			if (!exists $not_in_next{$elem->[0]}) {
-+				if ($msg) {
-+					print STDERR $msg;
-+					undef $msg;
-+				}
-+				print STDERR " $elem->[1]\n";
-+			}
-+		}
-+	' "$topic" "$not_in_next" "$not_in_master"
-+	exit 1
-+fi
-+
-+<<\DOC_END
-+
-+This sample hook safeguards topic branches that have been
-+published from being rewound.
-+
-+The workflow assumed here is:
-+
-+ * Once a topic branch forks from "master", "master" is never
-+   merged into it again (either directly or indirectly).
-+
-+ * Once a topic branch is fully cooked and merged into "master",
-+   it is deleted.  If you need to build on top of it to correct
-+   earlier mistakes, a new topic branch is created by forking at
-+   the tip of the "master".  This is not strictly necessary, but
-+   it makes it easier to keep your history simple.
-+
-+ * Whenever you need to test or publish your changes to topic
-+   branches, merge them into "next" branch.
-+
-+The script, being an example, hardcodes the publish branch name
-+to be "next", but it is trivial to make it configurable via
-+$GIT_DIR/config mechanism.
-+
-+With this workflow, you would want to know:
-+
-+(1) ... if a topic branch has ever been merged to "next".  Young
-+    topic branches can have stupid mistakes you would rather
-+    clean up before publishing, and things that have not been
-+    merged into other branches can be easily rebased without
-+    affecting other people.  But once it is published, you would
-+    not want to rewind it.
-+
-+(2) ... if a topic branch has been fully merged to "master".
-+    Then you can delete it.  More importantly, you should not
-+    build on top of it -- other people may already want to
-+    change things related to the topic as patches against your
-+    "master", so if you need further changes, it is better to
-+    fork the topic (perhaps with the same name) afresh from the
-+    tip of "master".
-+
-+Let's look at this example:
-+
-+		   o---o---o---o---o---o---o---o---o---o "next"
-+		  /       /           /           /
-+		 /   a---a---b A     /           /
-+		/   /               /           /
-+	       /   /   c---c---c---c B         /
-+	      /   /   /             \         /
-+	     /   /   /   b---b C     \       /
-+	    /   /   /   /             \     /
-+    ---o---o---o---o---o---o---o---o---o---o---o "master"
-+
-+
-+A, B and C are topic branches.
-+
-+ * A has one fix since it was merged up to "next".
-+
-+ * B has finished.  It has been fully merged up to "master" and "next",
-+   and is ready to be deleted.
-+
-+ * C has not merged to "next" at all.
-+
-+We would want to allow C to be rebased, refuse A, and encourage
-+B to be deleted.
-+
-+To compute (1):
-+
-+	git rev-list ^master ^topic next
-+	git rev-list ^master        next
-+
-+	if these match, topic has not merged in next at all.
-+
-+To compute (2):
-+
-+	git rev-list master..topic
-+
-+	if this is empty, it is fully merged to "master".
-+
-+DOC_END
-diff -ruN aos_pintos/.git/hooks/pre-receive.sample pintos-solution/.git/hooks/pre-receive.sample
---- aos_pintos/.git/hooks/pre-receive.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/pre-receive.sample	2025-04-13 01:30:52.450151710 +0000
-@@ -0,0 +1,24 @@
-+#!/bin/sh
-+#
-+# An example hook script to make use of push options.
-+# The example simply echoes all push options that start with 'echoback='
-+# and rejects all pushes when the "reject" push option is used.
-+#
-+# To enable this hook, rename this file to "pre-receive".
-+
-+if test -n "$GIT_PUSH_OPTION_COUNT"
-+then
-+	i=0
-+	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
-+	do
-+		eval "value=\$GIT_PUSH_OPTION_$i"
-+		case "$value" in
-+		echoback=*)
-+			echo "echo from the pre-receive-hook: ${value#*=}" >&2
-+			;;
-+		reject)
-+			exit 1
-+		esac
-+		i=$((i + 1))
-+	done
-+fi
-diff -ruN aos_pintos/.git/hooks/prepare-commit-msg.sample pintos-solution/.git/hooks/prepare-commit-msg.sample
---- aos_pintos/.git/hooks/prepare-commit-msg.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/prepare-commit-msg.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,42 @@
-+#!/bin/sh
-+#
-+# An example hook script to prepare the commit log message.
-+# Called by "git commit" with the name of the file that has the
-+# commit message, followed by the description of the commit
-+# message's source.  The hook's purpose is to edit the commit
-+# message file.  If the hook fails with a non-zero status,
-+# the commit is aborted.
-+#
-+# To enable this hook, rename this file to "prepare-commit-msg".
-+
-+# This hook includes three examples. The first one removes the
-+# "# Please enter the commit message..." help message.
-+#
-+# The second includes the output of "git diff --name-status -r"
-+# into the message, just before the "git status" output.  It is
-+# commented because it doesn't cope with --amend or with squashed
-+# commits.
-+#
-+# The third example adds a Signed-off-by line to the message, that can
-+# still be edited.  This is rarely a good idea.
-+
-+COMMIT_MSG_FILE=$1
-+COMMIT_SOURCE=$2
-+SHA1=$3
-+
-+/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
-+
-+# case "$COMMIT_SOURCE,$SHA1" in
-+#  ,|template,)
-+#    /usr/bin/perl -i.bak -pe '
-+#       print "\n" . `git diff --cached --name-status -r`
-+# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
-+#  *) ;;
-+# esac
-+
-+# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-+# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
-+# if test -z "$COMMIT_SOURCE"
-+# then
-+#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
-+# fi
-diff -ruN aos_pintos/.git/hooks/update.sample pintos-solution/.git/hooks/update.sample
---- aos_pintos/.git/hooks/update.sample	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/hooks/update.sample	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,128 @@
-+#!/bin/sh
-+#
-+# An example hook script to block unannotated tags from entering.
-+# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
-+#
-+# To enable this hook, rename this file to "update".
-+#
-+# Config
-+# ------
-+# hooks.allowunannotated
-+#   This boolean sets whether unannotated tags will be allowed into the
-+#   repository.  By default they won't be.
-+# hooks.allowdeletetag
-+#   This boolean sets whether deleting tags will be allowed in the
-+#   repository.  By default they won't be.
-+# hooks.allowmodifytag
-+#   This boolean sets whether a tag may be modified after creation. By default
-+#   it won't be.
-+# hooks.allowdeletebranch
-+#   This boolean sets whether deleting branches will be allowed in the
-+#   repository.  By default they won't be.
-+# hooks.denycreatebranch
-+#   This boolean sets whether remotely creating branches will be denied
-+#   in the repository.  By default this is allowed.
-+#
-+
-+# --- Command line
-+refname="$1"
-+oldrev="$2"
-+newrev="$3"
-+
-+# --- Safety check
-+if [ -z "$GIT_DIR" ]; then
-+	echo "Don't run this script from the command line." >&2
-+	echo " (if you want, you could supply GIT_DIR then run" >&2
-+	echo "  $0 <ref> <oldrev> <newrev>)" >&2
-+	exit 1
-+fi
-+
-+if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
-+	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
-+	exit 1
-+fi
-+
-+# --- Config
-+allowunannotated=$(git config --bool hooks.allowunannotated)
-+allowdeletebranch=$(git config --bool hooks.allowdeletebranch)
-+denycreatebranch=$(git config --bool hooks.denycreatebranch)
-+allowdeletetag=$(git config --bool hooks.allowdeletetag)
-+allowmodifytag=$(git config --bool hooks.allowmodifytag)
-+
-+# check for no description
-+projectdesc=$(sed -e '1q' "$GIT_DIR/description")
-+case "$projectdesc" in
-+"Unnamed repository"* | "")
-+	echo "*** Project description file hasn't been set" >&2
-+	exit 1
-+	;;
-+esac
-+
-+# --- Check types
-+# if $newrev is 0000...0000, it's a commit to delete a ref.
-+zero="0000000000000000000000000000000000000000"
-+if [ "$newrev" = "$zero" ]; then
-+	newrev_type=delete
-+else
-+	newrev_type=$(git cat-file -t $newrev)
-+fi
-+
-+case "$refname","$newrev_type" in
-+	refs/tags/*,commit)
-+		# un-annotated tag
-+		short_refname=${refname##refs/tags/}
-+		if [ "$allowunannotated" != "true" ]; then
-+			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
-+			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
-+			exit 1
-+		fi
-+		;;
-+	refs/tags/*,delete)
-+		# delete tag
-+		if [ "$allowdeletetag" != "true" ]; then
-+			echo "*** Deleting a tag is not allowed in this repository" >&2
-+			exit 1
-+		fi
-+		;;
-+	refs/tags/*,tag)
-+		# annotated tag
-+		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
-+		then
-+			echo "*** Tag '$refname' already exists." >&2
-+			echo "*** Modifying a tag is not allowed in this repository." >&2
-+			exit 1
-+		fi
-+		;;
-+	refs/heads/*,commit)
-+		# branch
-+		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
-+			echo "*** Creating a branch is not allowed in this repository" >&2
-+			exit 1
-+		fi
-+		;;
-+	refs/heads/*,delete)
-+		# delete branch
-+		if [ "$allowdeletebranch" != "true" ]; then
-+			echo "*** Deleting a branch is not allowed in this repository" >&2
-+			exit 1
-+		fi
-+		;;
-+	refs/remotes/*,commit)
-+		# tracking branch
-+		;;
-+	refs/remotes/*,delete)
-+		# delete tracking branch
-+		if [ "$allowdeletebranch" != "true" ]; then
-+			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
-+			exit 1
-+		fi
-+		;;
-+	*)
-+		# Anything else (is there anything else?)
-+		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
-+		exit 1
-+		;;
-+esac
-+
-+# --- Finished
-+exit 0
-Binary files aos_pintos/.git/index and pintos-solution/.git/index differ
-diff -ruN aos_pintos/.git/info/exclude pintos-solution/.git/info/exclude
---- aos_pintos/.git/info/exclude	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/info/exclude	2025-04-13 01:30:52.454151752 +0000
-@@ -0,0 +1,6 @@
-+# git ls-files --others --exclude-from=.git/info/exclude
-+# Lines that start with '#' are comments.
-+# For a project mostly in C, the following would be a good set of
-+# exclude patterns (uncomment them if you want to use them):
-+# *.[oa]
-+# *~
-diff -ruN aos_pintos/.git/logs/HEAD pintos-solution/.git/logs/HEAD
---- aos_pintos/.git/logs/HEAD	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/logs/HEAD	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
-diff -ruN aos_pintos/.git/logs/refs/heads/master pintos-solution/.git/logs/refs/heads/master
---- aos_pintos/.git/logs/refs/heads/master	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/logs/refs/heads/master	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
-diff -ruN aos_pintos/.git/logs/refs/remotes/origin/HEAD pintos-solution/.git/logs/refs/remotes/origin/HEAD
---- aos_pintos/.git/logs/refs/remotes/origin/HEAD	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/logs/refs/remotes/origin/HEAD	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+0000000000000000000000000000000000000000 cc300295edd904f0dba0a8bd3a7770bc19364ac3 aos-vbox <aos@aos-vbox.(none)> 1744507852 +0000	clone: from https://github.com/ConnorMCode/Project3.git
-Binary files aos_pintos/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.idx and pintos-solution/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.idx differ
-Binary files aos_pintos/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.pack and pintos-solution/.git/objects/pack/pack-e6b86b4a490fbff411c6f58fce2ba6c8d185c574.pack differ
-diff -ruN aos_pintos/.git/packed-refs pintos-solution/.git/packed-refs
---- aos_pintos/.git/packed-refs	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/packed-refs	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1,2 @@
-+# pack-refs with: peeled fully-peeled sorted 
-+cc300295edd904f0dba0a8bd3a7770bc19364ac3 refs/remotes/origin/master
-diff -ruN aos_pintos/.git/refs/heads/master pintos-solution/.git/refs/heads/master
---- aos_pintos/.git/refs/heads/master	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/refs/heads/master	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+cc300295edd904f0dba0a8bd3a7770bc19364ac3
-diff -ruN aos_pintos/.git/refs/remotes/origin/HEAD pintos-solution/.git/refs/remotes/origin/HEAD
---- aos_pintos/.git/refs/remotes/origin/HEAD	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/.git/refs/remotes/origin/HEAD	2025-04-13 01:30:52.854155928 +0000
-@@ -0,0 +1 @@
-+ref: refs/remotes/origin/master
 diff -ruN aos_pintos/src/examples/Makefile pintos-solution/src/examples/Makefile
---- aos_pintos/src/examples/Makefile	2025-04-13 01:37:15.841621234 +0000
-+++ pintos-solution/src/examples/Makefile	2025-04-13 01:30:52.862156011 +0000
+--- aos_pintos/src/examples/Makefile	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/examples/Makefile	2025-04-27 21:48:39.454134580 +0000
 @@ -4,7 +4,7 @@
  # To add a new test, put its name on the PROGS list
  # and then add a name_SRC line that lists its source files.
@@ -772,136 +19,719 @@ diff -ruN aos_pintos/src/examples/Makefile pintos-solution/src/examples/Makefile
  
  # Should work in project 3; also in project 4 if VM is included.
  bubsort_SRC = bubsort.c
-diff -ruN aos_pintos/src/examples/swap_test.c pintos-solution/src/examples/swap_test.c
---- aos_pintos/src/examples/swap_test.c	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/src/examples/swap_test.c	2025-04-13 01:30:52.862156011 +0000
-@@ -0,0 +1,29 @@
-+#include "syscall.h"
-+#include "stdio.h"
-+
-+#define PAGE_SIZE 4096
-+#define NUM_PAGES 100
-+#define TOTAL_SIZE (PAGE_SIZE * NUM_PAGES)
-+
-+static char big_array[TOTAL_SIZE];
-+
-+int main(void) {
-+  int i;
-+
-+  // Write a unique value to each page to ensure they get swapped
-+  for (i = 0; i < NUM_PAGES; i++) {
-+    big_array[i * PAGE_SIZE] = (char)(i + 1);
+diff -ruN aos_pintos/src/filesys/Make.vars pintos-solution/src/filesys/Make.vars
+--- aos_pintos/src/filesys/Make.vars	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/Make.vars	2025-04-27 21:48:39.458134580 +0000
+@@ -1,8 +1,9 @@
+ # -*- makefile -*-
+ 
+-kernel.bin: DEFINES = -DUSERPROG -DFILESYS
++kernel.bin: DEFINES = -DUSERPROG -DFILESYS -DVM
+ KERNEL_SUBDIRS = threads devices lib lib/kernel userprog filesys
+ TEST_SUBDIRS = tests/userprog tests/filesys/base tests/filesys/extended
+ GRADING_FILE = $(SRCDIR)/tests/filesys/Grading
+ SIMULATOR = --qemu
++KERNEL_SUBDIRS += vm
+ 
+diff -ruN aos_pintos/src/filesys/directory.c pintos-solution/src/filesys/directory.c
+--- aos_pintos/src/filesys/directory.c	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/directory.c	2025-04-27 21:48:39.458134580 +0000
+@@ -1,4 +1,4 @@
+-#include "filesys/directory.h"
++ #include "filesys/directory.h"
+ #include <stdio.h>
+ #include <string.h>
+ #include <list.h>
+@@ -23,17 +23,54 @@
+ 
+ /* Creates a directory with space for ENTRY_CNT entries in the
+    given SECTOR.  Returns true if successful, false on failure. */
+-bool dir_create (block_sector_t sector, size_t entry_cnt)
+-{
+-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
++bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector) {
++  // Create inode for directory, mark it as a directory type
++  if (!inode_create (sector, entry_cnt * sizeof (struct dir_entry), true)) {
++    return false;
 +  }
 +
-+  // Read back and verify
-+  for (i = 0; i < NUM_PAGES; i++) {
-+    if (big_array[i * PAGE_SIZE] != (char)(i + 1)) {
-+      printf("Mismatch at page %d: expected %d, got %d\n",
-+	     i, i + 1, big_array[i * PAGE_SIZE]);
-+      return 1;
++  struct dir *dir = dir_open(inode_open(sector));
++  if (dir == NULL)
++    return false;
++
++  // Add '.' pointing to self
++  struct dir_entry dot_entry;
++  memset(&dot_entry, 0, sizeof dot_entry);
++  dot_entry.in_use = true;
++  strlcpy(dot_entry.name, ".", NAME_MAX + 1);
++  dot_entry.inode_sector = sector;
++
++  if (inode_write_at(dir->inode, &dot_entry, sizeof dot_entry, 0) != sizeof dot_entry) {
++    dir_close(dir);
++    return false;
++  }
++
++  // Add '..' pointing to parent
++  struct dir_entry dotdot_entry;
++  memset(&dotdot_entry, 0, sizeof dotdot_entry);
++  dotdot_entry.in_use = true;
++  strlcpy(dotdot_entry.name, "..", NAME_MAX + 1);
++  dotdot_entry.inode_sector = parent_sector;
++
++  if (inode_write_at(dir->inode, &dotdot_entry, sizeof dotdot_entry, sizeof dot_entry) != sizeof dotdot_entry) {
++    dir_close(dir);
++    return false;
++  }
++
++  dir_close(dir);
++  return true;
+ }
+ 
+ /* Opens and returns the directory for the given INODE, of which
+    it takes ownership.  Returns a null pointer on failure. */
+ struct dir *dir_open (struct inode *inode)
+ {
++  if (inode == NULL || !inode_is_dir(inode)){
++    inode_close(inode);
++    return NULL;
++  }
+   struct dir *dir = calloc (1, sizeof *dir);
+-  if (inode != NULL && dir != NULL)
++  if (dir != NULL)
+     {
+       dir->inode = inode;
+       dir->pos = 0;
+@@ -132,36 +169,40 @@
+   off_t ofs;
+   bool success = false;
+ 
+-  ASSERT (dir != NULL);
+-  ASSERT (name != NULL);
++  ASSERT(dir != NULL);
++  ASSERT(name != NULL);
+ 
+   /* Check NAME for validity. */
+-  if (*name == '\0' || strlen (name) > NAME_MAX)
++  if (*name == '\0' || strlen(name) > NAME_MAX)
+     return false;
+ 
+   /* Check that NAME is not in use. */
+-  if (lookup (dir, name, NULL, NULL))
++  if (lookup(dir, name, NULL, NULL))
+     goto done;
+ 
+-  /* Set OFS to offset of free slot.
+-     If there are no free slots, then it will be set to the
+-     current end-of-file.
+-
+-     inode_read_at() will only return a short read at end of file.
+-     Otherwise, we'd need to verify that we didn't get a short
+-     read due to something intermittent such as low memory. */
+-  for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
++  /* Set OFS to offset of free slot. */
++  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
+        ofs += sizeof e)
+     if (!e.in_use)
+       break;
+ 
+-  /* Write slot. */
++  /* Write directory entry. */
+   e.in_use = true;
+-  strlcpy (e.name, name, sizeof e.name);
++  strlcpy(e.name, name, sizeof e.name);
+   e.inode_sector = inode_sector;
+-  success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
++  success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
++
++  /* If it's a directory, set up "." and ".." entries */
++  if (success && inode_is_dir(inode_open(inode_sector))) {
++    struct dir *subdir = dir_open(inode_open(inode_sector));
++    if (subdir != NULL) {
++      dir_add(subdir, ".", inode_sector);                          // self
++      dir_add(subdir, "..", inode_get_inumber(dir->inode));       // parent
++      dir_close(subdir);
++    }
++  }
+ 
+-done:
++ done:
+   return success;
+ }
+ 
+diff -ruN aos_pintos/src/filesys/directory.h pintos-solution/src/filesys/directory.h
+--- aos_pintos/src/filesys/directory.h	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/directory.h	2025-04-27 21:48:39.458134580 +0000
+@@ -14,7 +14,7 @@
+ struct inode;
+ 
+ /* Opening and closing directories. */
+-bool dir_create (block_sector_t sector, size_t entry_cnt);
++bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector);
+ struct dir *dir_open (struct inode *);
+ struct dir *dir_open_root (void);
+ struct dir *dir_reopen (struct dir *);
+diff -ruN aos_pintos/src/filesys/filesys.c pintos-solution/src/filesys/filesys.c
+--- aos_pintos/src/filesys/filesys.c	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/filesys.c	2025-04-28 03:44:54.983079430 +0000
+@@ -42,7 +42,7 @@
+   block_sector_t inode_sector = 0;
+   struct dir *dir = dir_open_root ();
+   bool success = (dir != NULL && free_map_allocate (1, &inode_sector) &&
+-                  inode_create (inode_sector, initial_size) &&
++                  inode_create (inode_sector, initial_size, false) &&
+                   dir_add (dir, name, inode_sector));
+   if (!success && inode_sector != 0)
+     free_map_release (inode_sector, 1);
+@@ -116,8 +116,8 @@
+ {
+   printf ("Formatting file system...");
+   free_map_create ();
+-  if (!dir_create (ROOT_DIR_SECTOR, 16))
++  if (!dir_create (ROOT_DIR_SECTOR, 16, ROOT_DIR_SECTOR))
+     PANIC ("root directory creation failed");
+   free_map_close ();
+   printf ("done.\n");
+-}
+\ No newline at end of file
++}
+diff -ruN aos_pintos/src/filesys/free-map.c pintos-solution/src/filesys/free-map.c
+--- aos_pintos/src/filesys/free-map.c	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/free-map.c	2025-04-28 03:45:40.050945525 +0000
+@@ -5,6 +5,14 @@
+ #include "filesys/filesys.h"
+ #include "filesys/inode.h"
+ 
++// #define FREE_MAP_DEBUG
++
++#ifdef FREE_MAP_DEBUG
++#define dprintf(...) printf(__VA_ARGS__)
++#else
++#define dprintf(...) ((void)0)
++#endif
++
+ static struct file *free_map_file; /* Free map file. */
+ static struct bitmap *free_map;    /* Free map, one bit per sector. */
+ 
+@@ -48,11 +56,19 @@
+ /* Opens the free map file and reads it from disk. */
+ void free_map_open (void)
+ {
++
++  dprintf("[free_map_open] Opening free map at sector %d\n", FREE_MAP_SECTOR);
++  
+   free_map_file = file_open (inode_open (FREE_MAP_SECTOR));
+   if (free_map_file == NULL)
+     PANIC ("can't open free map");
++
++  dprintf("[free_map_open] Successfully opened free map file. Now reading bitmap...\n");
++  
+   if (!bitmap_read (free_map, free_map_file))
+     PANIC ("can't read free map");
++
++  dprintf("[free_map_open] Successfully read free map bitmap from disk.\n");
+ }
+ 
+ /* Writes the free map to disk and closes the free map file. */
+@@ -63,7 +79,10 @@
+ void free_map_create (void)
+ {
+   /* Create inode. */
+-  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map)))
++
++  dprintf("[free_map_create] bitmap_file_size = %d\n", bitmap_file_size(free_map));
++  
++  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map), false))
+     PANIC ("free map creation failed");
+ 
+   /* Write bitmap to file. */
+diff -ruN aos_pintos/src/filesys/inode.c pintos-solution/src/filesys/inode.c
+--- aos_pintos/src/filesys/inode.c	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/inode.c	2025-04-28 13:57:41.222051636 +0000
+@@ -7,19 +7,41 @@
+ #include "filesys/free-map.h"
+ #include "threads/malloc.h"
+ 
++// #define INODE_DEBUG
++
++#ifdef INODE_DEBUG
++#define dprintf(...) printf(__VA_ARGS__)
++#else
++#define dprintf(...) ((void)0)
++#endif
++
+ /* Identifies an inode. */
+ #define INODE_MAGIC 0x494e4f44
+ 
++#define DIRECT_BLOCKS 12
++#define INDIRECT_BLOCKS 1
++#define DOUBLE_INDIRECT_BLOCKS 1
++
++#define PTRS_PER_BLOCK (BLOCK_SECTOR_SIZE / sizeof(block_sector_t))
++
+ /* On-disk inode.
+    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
+ struct inode_disk
+ {
+-  block_sector_t start; /* First data sector. */
++  block_sector_t direct[DIRECT_BLOCKS]; /* First data sector. */
++  block_sector_t indirect;
++  block_sector_t double_indirect;
+   off_t length;         /* File size in bytes. */
+   unsigned magic;       /* Magic number. */
+   bool is_symlink;      /* True if symbolic link, false otherwise. */
+-  uint32_t unused[124]; /* Not used. */
+-};
++  bool is_dir;
++  uint8_t unused[BLOCK_SECTOR_SIZE
++		 - (DIRECT_BLOCKS * sizeof(block_sector_t))
++		 - 2 * sizeof(block_sector_t)
++		 - sizeof(off_t)
++		 - sizeof(unsigned)
++		 - 2 * sizeof(bool)];
++}__attribute__((packed));
+ 
+ /* Returns the number of sectors to allocate for an inode SIZE
+    bytes long. */
+@@ -46,10 +68,42 @@
+ static block_sector_t byte_to_sector (const struct inode *inode, off_t pos)
+ {
+   ASSERT (inode != NULL);
+-  if (pos < inode->data.length)
+-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+-  else
+-    return -1;
++  if (pos >= inode->data.length)
++    return (block_sector_t) -1;
++
++  off_t index = pos / BLOCK_SECTOR_SIZE;
++
++  if((size_t)index < DIRECT_BLOCKS){
++    return inode->data.direct[index];
++  }
++
++  index -= DIRECT_BLOCKS;
++  if((size_t)index < PTRS_PER_BLOCK) {
++    block_sector_t indirect_block[PTRS_PER_BLOCK];
++
++    block_read(fs_device, inode->data.indirect, indirect_block);
++
++    return indirect_block[index];
++  }
++
++  index -= PTRS_PER_BLOCK;
++  if((size_t)index < PTRS_PER_BLOCK * PTRS_PER_BLOCK){
++    block_sector_t double_indirect_block[PTRS_PER_BLOCK];
++
++    block_read(fs_device, inode->data.double_indirect, double_indirect_block);
++
++    block_sector_t indirect_sector = double_indirect_block[index / PTRS_PER_BLOCK];
++    if(indirect_sector == 0){
++      return (block_sector_t) -1;
++    }
++
++    block_sector_t indirect_block[PTRS_PER_BLOCK];
++    block_read(fs_device, indirect_sector, indirect_block);
++
++    return indirect_block[index % PTRS_PER_BLOCK];
++  }
++
++  return (block_sector_t) -1;
+ }
+ 
+ /* List of open inodes, so that opening a single inode twice
+@@ -64,40 +118,52 @@
+    device.
+    Returns true if successful.
+    Returns false if memory or disk allocation fails. */
+-bool inode_create (block_sector_t sector, off_t length)
++bool inode_create (block_sector_t sector, off_t length, bool is_dir)
+ {
+-  struct inode_disk *disk_inode = NULL;
+-  bool success = false;
+-
+   ASSERT (length >= 0);
+ 
+-  /* If this assertion fails, the inode structure is not exactly
+-     one sector in size, and you should fix that. */
+-  ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
++  struct inode_disk *disk_inode = calloc (1, sizeof *disk_inode);
++  if (disk_inode == NULL){
++    dprintf("[inode_create] Failed to allocate disk_inode\n");
++    return false;
++  }
+ 
+-  disk_inode = calloc (1, sizeof *disk_inode);
+-  if (disk_inode != NULL)
+-    {
+-      size_t sectors = bytes_to_sectors (length);
+-      disk_inode->length = length;
+-      disk_inode->magic = INODE_MAGIC;
+-      disk_inode->is_symlink = false;
+-      if (free_map_allocate (sectors, &disk_inode->start))
+-        {
+-          block_write (fs_device, sector, disk_inode);
+-          if (sectors > 0)
+-            {
+-              static char zeros[BLOCK_SECTOR_SIZE];
+-              size_t i;
++  ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
+ 
+-              for (i = 0; i < sectors; i++)
+-                block_write (fs_device, disk_inode->start + i, zeros);
+-            }
+-          success = true;
+-        }
+-      free (disk_inode);
+-    }
+-  return success;
++  dprintf("[inode_create] Creating inode at sector %d with length %d, is_dir=%d\n", (int)sector, (int)length, is_dir);
++  
++  disk_inode->length = 0; // Start at 0, will grow via inode_resize
++  disk_inode->magic = INODE_MAGIC;
++  disk_inode->is_symlink = false;
++  disk_inode->is_dir = is_dir;
++
++  struct inode tmp_inode;
++  memset(&tmp_inode, 0, sizeof tmp_inode);
++  tmp_inode.data = *disk_inode;
++
++  dprintf("[inode_create] Before inode_resize: tmp_inode length=%d\n", (int)tmp_inode.data.length);
++  
++  // Use inode_resize to allocate and initialize sectors
++  if (!inode_resize(&tmp_inode, length)) {
++    dprintf("[inode_create] inode_resize failed\n");
++    free(disk_inode);
++    return false;
++  }
++
++  dprintf("[inode_create] After inode_resize: tmp_inode length=%d\n", (int)tmp_inode.data.length);
++
++  // Copy updated inode_disk structure back
++  *disk_inode = tmp_inode.data;
++
++  dprintf("[inode_create] After resize copy in disk_inode length=%d\n", disk_inode->length);
++
++  // Write inode to disk
++  dprintf("[inode_create] Writing inode to sector %d\n", (int)sector);
++  block_write(fs_device, sector, disk_inode);
++
++  free(disk_inode);
++  dprintf("[inode_create] Inode creation complete\n");
++  return true;
+ }
+ 
+ /* Reads an inode from SECTOR
+@@ -116,6 +182,7 @@
+       if (inode->sector == sector)
+         {
+           inode_reopen (inode);
++	  dprintf("[inode_open] At sector %d found length %d\n", (int)inode->sector, (int)inode->data.length);
+           return inode;
+         }
+     }
+@@ -132,6 +199,7 @@
+   inode->deny_write_cnt = 0;
+   inode->removed = false;
+   block_read (fs_device, inode->sector, &inode->data);
++  dprintf("[inode_open] At sector %d found length %d\n", (int)inode->sector, (int)inode->data.length);
+   return inode;
+ }
+ 
+@@ -164,12 +232,13 @@
+       /* Remove from inode list and release lock. */
+       list_remove (&inode->elem);
+ 
++      block_write (fs_device, inode->sector, &inode->data);
++
+       /* Deallocate blocks if removed. */
+       if (inode->removed)
+         {
+           free_map_release (inode->sector, 1);
+-          free_map_release (inode->data.start,
+-                            bytes_to_sectors (inode->data.length));
++          inode_deallocate_sectors(&(inode->data));
+         }
+ 
+       free (inode);
+@@ -194,6 +263,9 @@
+   off_t bytes_read = 0;
+   uint8_t *bounce = NULL;
+ 
++  dprintf("[inode_read_at] Starting read: inode sector=%d, inode length=%d, requested size=%d, start offset=%d\n",
++	  (int)inode->sector, (int)inode_length(inode), (int)size, (int)offset);
++
+   while (size > 0)
+     {
+       /* Disk sector to read, starting byte offset within sector. */
+@@ -207,12 +279,19 @@
+ 
+       /* Number of bytes to actually copy out of this sector. */
+       int chunk_size = size < min_left ? size : min_left;
+-      if (chunk_size <= 0)
++      if (chunk_size <= 0){
++	dprintf("[inode_read_at] Breaking: chunk_size <= 0 (inode_left=%d, sector_left=%d, size=%d)\n",
++		(int)inode_left, (int)sector_left, (int)size);
+         break;
++      }
+ 
++      dprintf("[inode_read_at] Reading sector %d at offset %d, chunk size %d\n",
++	      sector_idx, sector_ofs, chunk_size);
++      
+       if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
+         {
+           /* Read full sector directly into caller's buffer. */
++	  dprintf("[inode_read_at] Full sector read into buffer\n");
+           block_read (fs_device, sector_idx, buffer + bytes_read);
+         }
+       else
+@@ -222,9 +301,12 @@
+           if (bounce == NULL)
+             {
+               bounce = malloc (BLOCK_SECTOR_SIZE);
+-              if (bounce == NULL)
++              if (bounce == NULL){
++		dprintf("[inode_read_at] Bounce buffer malloc failed!\n");
+                 break;
++	      }
+             }
++	  dprintf("[inode_read_at] Partial sector read using bounce buffer\n");
+           block_read (fs_device, sector_idx, bounce);
+           memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
+         }
+@@ -236,6 +318,8 @@
+     }
+   free (bounce);
+ 
++  dprintf("[inode_read_at] Read %d bytes\n", (int)bytes_read);
++
+   return bytes_read;
+ }
+ 
+@@ -254,19 +338,21 @@
+   if (inode->deny_write_cnt)
+     return 0;
+ 
++  off_t end_offset = offset + size;
++  if (end_offset > inode_length(inode)){
++    if (!inode_resize(inode, end_offset)){
++      return bytes_written;
++    }
++  }
++  
+   while (size > 0)
+     {
+-      /* Sector to write, starting byte offset within sector. */
+       block_sector_t sector_idx = byte_to_sector (inode, offset);
+       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
+ 
+-      /* Bytes left in inode, bytes left in sector, lesser of the two. */
+-      off_t inode_left = inode_length (inode) - offset;
+       int sector_left = BLOCK_SECTOR_SIZE - sector_ofs;
+-      int min_left = inode_left < sector_left ? inode_left : sector_left;
++      int chunk_size = size < sector_left ? size : sector_left;
+ 
+-      /* Number of bytes to actually write into this sector. */
+-      int chunk_size = size < min_left ? size : min_left;
+       if (chunk_size <= 0)
+         break;
+ 
+@@ -337,3 +423,152 @@
+   inode->data.is_symlink = is_symlink;
+   block_write (fs_device, inode->sector, &inode->data);
+ }
++
++bool inode_resize(struct inode *inode, off_t new_length){
++  if (new_length < inode->data.length){
++    //implement shrinking
++    return false;
++  }
++
++  off_t old_length = inode->data.length;
++  size_t old_sectors = bytes_to_sectors(old_length);
++  size_t new_sectors = bytes_to_sectors(new_length);
++
++  if (new_sectors > old_sectors){
++    for (size_t i = old_sectors; i < new_sectors; i++){
++      block_sector_t new_sector;
++      if(!free_map_allocate(1, &new_sector)){
++	return false;
++      }
++
++      static char zeros[BLOCK_SECTOR_SIZE];
++      block_write(fs_device, new_sector, zeros);
++
++      if (!inode_allocate_sector(&inode->data, i, new_sector)){
++	return false;
++      }
 +    }
 +  }
 +
-+  printf("swap_test passed!\n");
-+  return 0;
++  inode->data.length = new_length;
++
++  block_write(fs_device, inode->sector, &inode->data);
++
++  return true;
 +}
-diff -ruN aos_pintos/src/examples/swap_test.c~ pintos-solution/src/examples/swap_test.c~
---- aos_pintos/src/examples/swap_test.c~	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/src/examples/swap_test.c~	2025-04-13 01:30:52.862156011 +0000
-@@ -0,0 +1,36 @@
-+#include <stdio.h>
-+#include <stdlib.h>
-+#include "syscall.h"
 +
-+#define PAGE_SIZE 4096
-+#define NUM_PAGES 100  // Adjust upward if your physical memory is large
++bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_sector_t new_sector){
 +
-+int main(void) {
-+  int i;
-+  char **pages = (char **)malloc(NUM_PAGES * sizeof(char *));
-+  if (pages == NULL) {
-+    printf("malloc failed!\n");
-+    return 1;
++  static char zeros[BLOCK_SECTOR_SIZE];
++  
++  if ((size_t)index < DIRECT_BLOCKS){
++    disk_inode->direct[index] = new_sector;
++    return true;
 +  }
 +
-+  // Allocate pages and write a value
-+  for (i = 0; i < NUM_PAGES; i++) {
-+    pages[i] = (char *)malloc(PAGE_SIZE);
-+    if (pages[i] == NULL) {
-+      printf("page %d malloc failed!\n", i);
-+      return 1;
++  index -= DIRECT_BLOCKS;
++
++  if ((size_t)index < PTRS_PER_BLOCK){
++    if (disk_inode->indirect == 0){
++      if (!free_map_allocate(1, &disk_inode->indirect)){
++	return false;
++      }
++      block_write(fs_device, disk_inode->indirect, zeros);
 +    }
-+    pages[i][0] = (char)(i + 1);  // Write a unique value to the first byte
++
++    block_sector_t indirect_block[PTRS_PER_BLOCK];
++    block_read(fs_device, disk_inode->indirect, indirect_block);
++    indirect_block[index] = new_sector;
++    block_write(fs_device, disk_inode->indirect, indirect_block);
++    return true;
 +  }
 +
-+  // Verify all values
-+  for (i = 0; i < NUM_PAGES; i++) {
-+    if (pages[i][0] != (char)(i + 1)) {
-+      printf("Mismatch at page %d: expected %d, got %d\n", i, i + 1, pages[i][0]);
-+      return 1;
++  index -= PTRS_PER_BLOCK;
++  if ((size_t)index < PTRS_PER_BLOCK * PTRS_PER_BLOCK) {
++    if (disk_inode->double_indirect == 0) {
++      if (!free_map_allocate(1, &disk_inode->double_indirect)) return false;
++      block_write(fs_device, disk_inode->double_indirect, zeros);
 +    }
++
++    block_sector_t outer_block[PTRS_PER_BLOCK];
++    block_read(fs_device, disk_inode->double_indirect, outer_block);
++
++    size_t outer_index = index / PTRS_PER_BLOCK;
++    size_t inner_index = index % PTRS_PER_BLOCK;
++
++    if (outer_block[outer_index] == 0) {
++      if (!free_map_allocate(1, &outer_block[outer_index])) return false;
++      block_write(fs_device, outer_block[outer_index], zeros);
++      block_write(fs_device, disk_inode->double_indirect, outer_block); // update outer block
++    }
++
++    block_sector_t inner_block[PTRS_PER_BLOCK];
++    block_read(fs_device, outer_block[outer_index], inner_block);
++    inner_block[inner_index] = new_sector;
++    block_write(fs_device, outer_block[outer_index], inner_block);
++    return true;
 +  }
 +
-+  printf("swap_test passed!\n");
-+  return 0;
++  return false; // index too large
 +}
-diff -ruN aos_pintos/src/examples/test.c~ pintos-solution/src/examples/test.c~
---- aos_pintos/src/examples/test.c~	1970-01-01 00:00:00.000000000 +0000
-+++ pintos-solution/src/examples/test.c~	2025-04-13 01:30:52.862156011 +0000
-@@ -0,0 +1,50 @@
-+#include <stdio.h>
-+#include <stdlib.h>
-+#include <string.h>
-+#include <syscall.h>
 +
-+#define SAMPLE_TEXT "This is the sample text file for read-boundary test.\n"
-+#define SAMPLE_SIZE (sizeof SAMPLE_TEXT)
++void inode_deallocate_sectors(struct inode_disk *disk_inode) {
++  //static char zeros[BLOCK_SECTOR_SIZE];
++  size_t num_sectors = bytes_to_sectors(disk_inode->length);
 +
-+// Align close to page boundary
-+#define PAGE_SIZE 4096
-+
-+int
-+main (void)
-+{
-+  int handle;
-+  int byte_cnt;
-+
-+  // Allocate memory near the top of a page, like get_boundary_area()
-+  char *page = (char *) malloc (PAGE_SIZE);
-+  if (!page) {
-+    printf("Failed to allocate memory\n");
-+    return -1;
++  // 1. Direct blocks
++  size_t i = 0;
++  for (; i < DIRECT_BLOCKS && i < num_sectors; i++) {
++    if (disk_inode->direct[i] != 0)
++      free_map_release(disk_inode->direct[i], 1);
 +  }
 +
-+  // Place buffer so it straddles the boundary
-+  char *buffer = page + PAGE_SIZE - SAMPLE_SIZE / 2;
++  // 2. Indirect block
++  if (i < num_sectors && disk_inode->indirect != 0) {
++    block_sector_t indirect_block[PTRS_PER_BLOCK];
++    block_read(fs_device, disk_inode->indirect, indirect_block);
 +
-+  // Open test file
-+  handle = open ("sample.txt");
-+  if (handle <= 1) {
-+    printf("Failed to open file\n");
-+    return -1;
++    size_t indirect_count = num_sectors - i;
++    if (indirect_count > PTRS_PER_BLOCK) indirect_count = PTRS_PER_BLOCK;
++
++    for (size_t j = 0; j < indirect_count; j++) {
++      if (indirect_block[j] != 0)
++	free_map_release(indirect_block[j], 1);
++    }
++
++    free_map_release(disk_inode->indirect, 1);
++    i += indirect_count;
 +  }
 +
-+  byte_cnt = read (handle, buffer, SAMPLE_SIZE - 1);
-+  if (byte_cnt != SAMPLE_SIZE - 1) {
-+    printf ("read() returned %d instead of %zu\n", byte_cnt, SAMPLE_SIZE - 1);
-+    return -1;
-+  }
++  // 3. Double indirect block
++  if (i < num_sectors && disk_inode->double_indirect != 0) {
++    block_sector_t outer_block[PTRS_PER_BLOCK];
++    block_read(fs_device, disk_inode->double_indirect, outer_block);
 +
-+  if (strncmp (SAMPLE_TEXT, buffer, SAMPLE_SIZE - 1)) {
-+    printf ("expected text:\n%s\n", SAMPLE_TEXT);
-+    printf ("text actually read:\n%s\n", buffer);
-+    printf ("Text mismatch!\n");
-+    return -1;
-+  }
++    size_t total_double = num_sectors - i;
++    size_t outer_limit = DIV_ROUND_UP(total_double, PTRS_PER_BLOCK);
 +
-+  printf ("read_boundary_simple: passed\n");
-+  return 0;
++    for (size_t outer = 0; outer < outer_limit; outer++) {
++      if (outer_block[outer] != 0) {
++	block_sector_t inner_block[PTRS_PER_BLOCK];
++	block_read(fs_device, outer_block[outer], inner_block);
++
++	size_t inner_limit = total_double > PTRS_PER_BLOCK ? PTRS_PER_BLOCK : total_double;
++
++	for (size_t inner = 0; inner < inner_limit; inner++) {
++	  if (inner_block[inner] != 0)
++	    free_map_release(inner_block[inner], 1);
++	}
++
++	free_map_release(outer_block[outer], 1);
++	total_double -= inner_limit;
++      }
++    }
++
++    free_map_release(disk_inode->double_indirect, 1);
++  }
 +}
++
++bool inode_is_dir(struct inode *inode){
++  return inode != NULL && inode->data.is_dir;
++}
+diff -ruN aos_pintos/src/filesys/inode.h pintos-solution/src/filesys/inode.h
+--- aos_pintos/src/filesys/inode.h	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/filesys/inode.h	2025-04-28 03:48:05.966565857 +0000
+@@ -6,9 +6,10 @@
+ #include "devices/block.h"
+ 
+ struct bitmap;
++struct inode_disk;
+ 
+ void inode_init (void);
+-bool inode_create (block_sector_t, off_t);
++bool inode_create (block_sector_t, off_t, bool is_dir);
+ struct inode *inode_open (block_sector_t);
+ struct inode *inode_reopen (struct inode *);
+ block_sector_t inode_get_inumber (const struct inode *);
+@@ -22,4 +23,10 @@
+ bool inode_get_symlink (struct inode *inode);
+ void inode_set_symlink (struct inode *inode, bool is_symlink);
+ 
++bool inode_resize(struct inode *inode, off_t new_length);
++void inode_deallocate_sectors(struct inode_disk *disk_inode);
++bool inode_allocate_sector(struct inode_disk *disk_inode, size_t index, block_sector_t new_sector);
++
++bool inode_is_dir(struct inode *inode);
++
+ #endif /* filesys/inode.h */
+diff -ruN aos_pintos/src/lib/kernel/bitmap.c pintos-solution/src/lib/kernel/bitmap.c
+--- aos_pintos/src/lib/kernel/bitmap.c	2025-04-28 15:48:15.672391363 +0000
++++ pintos-solution/src/lib/kernel/bitmap.c	2025-04-28 03:49:47.574341709 +0000
+@@ -318,8 +318,11 @@
+   if (b->bit_cnt > 0)
+     {
+       off_t size = byte_cnt (b->bit_cnt);
++      printf("[bitmap_read] Attempting to read %d bytes into bitmap\n", (int)size);
+       success = file_read_at (file, b->bits, size, 0) == size;
+       b->bits[elem_cnt (b->bit_cnt) - 1] &= last_mask (b);
++      if (success)
++	printf("[bitmap_read] Read %d bytes\n", (int)size);
+     }
+   return success;
+ }
 diff -ruN aos_pintos/src/threads/init.c pintos-solution/src/threads/init.c
---- aos_pintos/src/threads/init.c	2025-04-13 01:37:15.237616424 +0000
-+++ pintos-solution/src/threads/init.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/threads/init.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/threads/init.c	2025-04-27 21:48:39.470134580 +0000
 @@ -36,6 +36,8 @@
  #include "devices/ide.h"
  #include "filesys/filesys.h"
@@ -929,8 +759,8 @@ diff -ruN aos_pintos/src/threads/init.c pintos-solution/src/threads/init.c
  
    /* Run actions specified on kernel command line. */
 diff -ruN aos_pintos/src/threads/interrupt.c pintos-solution/src/threads/interrupt.c
---- aos_pintos/src/threads/interrupt.c	2025-04-13 01:37:15.141615660 +0000
-+++ pintos-solution/src/threads/interrupt.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/threads/interrupt.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/threads/interrupt.c	2025-04-27 21:48:39.470134580 +0000
 @@ -339,7 +339,9 @@
  
        in_external_intr = true;
@@ -943,8 +773,8 @@ diff -ruN aos_pintos/src/threads/interrupt.c pintos-solution/src/threads/interru
    /* Invoke the interrupt's handler. */
    handler = intr_handlers[frame->vec_no];
 diff -ruN aos_pintos/src/threads/palloc.c pintos-solution/src/threads/palloc.c
---- aos_pintos/src/threads/palloc.c	2025-04-13 01:37:15.257616584 +0000
-+++ pintos-solution/src/threads/palloc.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/threads/palloc.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/threads/palloc.c	2025-04-27 21:48:39.470134580 +0000
 @@ -72,17 +72,19 @@
    void *pages;
    size_t page_idx;
@@ -969,8 +799,8 @@ diff -ruN aos_pintos/src/threads/palloc.c pintos-solution/src/threads/palloc.c
    if (pages != NULL)
      {
 diff -ruN aos_pintos/src/threads/thread.c pintos-solution/src/threads/thread.c
---- aos_pintos/src/threads/thread.c	2025-04-13 01:37:15.117615469 +0000
-+++ pintos-solution/src/threads/thread.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/threads/thread.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/threads/thread.c	2025-04-27 21:48:39.470134580 +0000
 @@ -13,6 +13,7 @@
  #include "threads/vaddr.h"
  #ifdef USERPROG
@@ -1052,8 +882,8 @@ diff -ruN aos_pintos/src/threads/thread.c pintos-solution/src/threads/thread.c
    list_push_back (&all_list, &t->allelem);
    intr_set_level (old_level);
 diff -ruN aos_pintos/src/threads/thread.h pintos-solution/src/threads/thread.h
---- aos_pintos/src/threads/thread.h	2025-04-13 01:37:15.349617316 +0000
-+++ pintos-solution/src/threads/thread.h	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/threads/thread.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/threads/thread.h	2025-04-27 21:48:39.470134580 +0000
 @@ -4,6 +4,7 @@
  #include <debug.h>
  #include <list.h>
@@ -1119,8 +949,8 @@ diff -ruN aos_pintos/src/threads/thread.h pintos-solution/src/threads/thread.h
 +
  #endif /* threads/thread.h */
 diff -ruN aos_pintos/src/userprog/exception.c pintos-solution/src/userprog/exception.c
---- aos_pintos/src/userprog/exception.c	2025-04-13 01:37:16.477626295 +0000
-+++ pintos-solution/src/userprog/exception.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/userprog/exception.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/userprog/exception.c	2025-04-27 21:48:39.470134580 +0000
 @@ -1,9 +1,16 @@
  #include "userprog/exception.h"
  #include <inttypes.h>
@@ -1175,8 +1005,8 @@ diff -ruN aos_pintos/src/userprog/exception.c pintos-solution/src/userprog/excep
    kill (f);
  }
 diff -ruN aos_pintos/src/userprog/process.c pintos-solution/src/userprog/process.c
---- aos_pintos/src/userprog/process.c	2025-04-13 01:37:16.397625659 +0000
-+++ pintos-solution/src/userprog/process.c	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/userprog/process.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/userprog/process.c	2025-04-27 21:48:39.470134580 +0000
 @@ -17,9 +17,13 @@
  #include "threads/palloc.h"
  #include "threads/thread.h"
@@ -1572,8 +1402,8 @@ diff -ruN aos_pintos/src/userprog/process.c pintos-solution/src/userprog/process
  }
  
 diff -ruN aos_pintos/src/userprog/process.h pintos-solution/src/userprog/process.h
---- aos_pintos/src/userprog/process.h	2025-04-13 01:37:16.625627473 +0000
-+++ pintos-solution/src/userprog/process.h	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/userprog/process.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/userprog/process.h	2025-04-27 21:48:39.470134580 +0000
 @@ -2,10 +2,26 @@
  #define USERPROG_PROCESS_H
  
@@ -1602,9 +1432,9 @@ diff -ruN aos_pintos/src/userprog/process.h pintos-solution/src/userprog/process
 +
  #endif /* userprog/process.h */
 diff -ruN aos_pintos/src/userprog/syscall.c pintos-solution/src/userprog/syscall.c
---- aos_pintos/src/userprog/syscall.c	2025-04-13 01:37:16.549626867 +0000
-+++ pintos-solution/src/userprog/syscall.c	2025-04-13 01:30:52.870156095 +0000
-@@ -2,18 +2,561 @@
+--- aos_pintos/src/userprog/syscall.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/userprog/syscall.c	2025-04-27 21:48:39.470134580 +0000
+@@ -2,18 +2,562 @@
  #include <stdio.h>
  #include <syscall-nr.h>
  #include "devices/block.h"
@@ -1620,6 +1450,7 @@ diff -ruN aos_pintos/src/userprog/syscall.c pintos-solution/src/userprog/syscall
 +#include "filesys/filesys.h"
 +#include "filesys/file.h"
 +#include "vm/page.h"
++#include "vm/frame.h"
  
  static void syscall_handler (struct intr_frame *);
  
@@ -2170,8 +2001,8 @@ diff -ruN aos_pintos/src/userprog/syscall.c pintos-solution/src/userprog/syscall
 +  //lock_release (&file_lock);
 +}
 diff -ruN aos_pintos/src/userprog/syscall.h pintos-solution/src/userprog/syscall.h
---- aos_pintos/src/userprog/syscall.h	2025-04-13 01:37:16.717628205 +0000
-+++ pintos-solution/src/userprog/syscall.h	2025-04-13 01:30:52.870156095 +0000
+--- aos_pintos/src/userprog/syscall.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/userprog/syscall.h	2025-04-27 21:48:39.470134580 +0000
 @@ -2,7 +2,10 @@
  #define USERPROG_SYSCALL_H
  
@@ -2184,8 +2015,8 @@ diff -ruN aos_pintos/src/userprog/syscall.h pintos-solution/src/userprog/syscall
  
  #endif /* userprog/syscall.h */
 diff -ruN aos_pintos/src/vm/frame.c pintos-solution/src/vm/frame.c
---- aos_pintos/src/vm/frame.c	2025-04-13 01:37:15.053614959 +0000
-+++ pintos-solution/src/vm/frame.c	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/frame.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/frame.c	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,112 @@
 +#include "vm/frame.h"
 +#include <stdlib.h>
@@ -2300,8 +2131,8 @@ diff -ruN aos_pintos/src/vm/frame.c pintos-solution/src/vm/frame.c
 +  lock_release(&f->lock);
 +}
 diff -ruN aos_pintos/src/vm/frame.h pintos-solution/src/vm/frame.h
---- aos_pintos/src/vm/frame.h	2025-04-13 01:37:14.933614003 +0000
-+++ pintos-solution/src/vm/frame.h	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/frame.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/frame.h	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,28 @@
 +#ifndef VM_FRAME_H
 +#define VM_FRAME_H
@@ -2332,8 +2163,8 @@ diff -ruN aos_pintos/src/vm/frame.h pintos-solution/src/vm/frame.h
 +
 +#endif
 diff -ruN aos_pintos/src/vm/page.c pintos-solution/src/vm/page.c
---- aos_pintos/src/vm/page.c	2025-04-13 01:37:14.969614290 +0000
-+++ pintos-solution/src/vm/page.c	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/page.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/page.c	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,217 @@
 +#include "vm/page.h"
 +#include "threads/malloc.h"
@@ -2553,8 +2384,8 @@ diff -ruN aos_pintos/src/vm/page.c pintos-solution/src/vm/page.c
 +  }
 +}
 diff -ruN aos_pintos/src/vm/page.h pintos-solution/src/vm/page.h
---- aos_pintos/src/vm/page.h	2025-04-13 01:37:14.901613749 +0000
-+++ pintos-solution/src/vm/page.h	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/page.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/page.h	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,43 @@
 +#ifndef VM_PAGE_H
 +#define VM_PAGE_H
@@ -2600,8 +2431,8 @@ diff -ruN aos_pintos/src/vm/page.h pintos-solution/src/vm/page.h
 +
 +#endif
 diff -ruN aos_pintos/src/vm/swap.c pintos-solution/src/vm/swap.c
---- aos_pintos/src/vm/swap.c	2025-04-13 01:37:15.069615086 +0000
-+++ pintos-solution/src/vm/swap.c	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/swap.c	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/swap.c	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,72 @@
 +#include "vm/swap.h"
 +#include "devices/block.h"
@@ -2676,8 +2507,8 @@ diff -ruN aos_pintos/src/vm/swap.c pintos-solution/src/vm/swap.c
 +  lock_release(&swap_lock);
 +}
 diff -ruN aos_pintos/src/vm/swap.h pintos-solution/src/vm/swap.h
---- aos_pintos/src/vm/swap.h	2025-04-13 01:37:14.953614163 +0000
-+++ pintos-solution/src/vm/swap.h	2025-04-13 01:30:52.874156137 +0000
+--- aos_pintos/src/vm/swap.h	2025-04-28 15:48:15.680391395 +0000
++++ pintos-solution/src/vm/swap.h	2025-04-27 21:48:39.470134580 +0000
 @@ -0,0 +1,8 @@
 +#include <stdbool.h>
 +#include "threads/synch.h"
